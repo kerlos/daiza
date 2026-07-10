@@ -34,6 +34,15 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'error',
     },
   },
+  // shadcn/ui の生成コンポーネントは、コンポーネントと variants（cva の戻り値）を
+  // 同一ファイルで export する設計のため react-refresh ルールに抵触する。
+  // 生成物の構造には手を入れない方針とし、この層に限り当該ルールを無効化する。
+  {
+    files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
   // Prettierと競合する整形系ルールを無効化（必ず最後）。
   prettier,
 );

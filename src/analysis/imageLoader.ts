@@ -1,0 +1,104 @@
+// PNG 読み込み：File を受け取り、ブラウザ内でデコードして FigureImage を得る。
+//
+// このモジュールは「入力の受け口」であり、解析パイプライン（重心・差込口…）の
+// 前段に位置する純粋ロジック。React には依存しない。
+//
+// プライバシー要件（SPEC）：画像はブラウザ内でのみ処理し、外部へ送信しない。
+// そのため createImageBitmap → Canvas という完全ローカルな経路でデコードする。
+//
+// 失敗は例外で投げず、型付きの AnalysisError として返す。呼び出し側（UI）が
+// クラッシュせずにメッセージ表示へマッピングできるようにするため。
+
+import type { AnalysisError, AnalysisErrorKind, FigureImage } from '@/model/types';
+import { hasVisiblePixels } from '@/utils/image';
+
+/** imageLoader が返し得るエラー種別。 */
+type ImageLoadErrorKind = Extract<
+  AnalysisErrorKind,
+  'imageLoadFailed' | 'unsupportedImage' | 'transparentImage'
+>;
+
+/** UI へ提示するエラーメッセージ（日本語）。 */
+const ERROR_MESSAGES: Record<ImageLoadErrorKind, string> = {
+  imageLoadFailed: 'PNG画像の読み込みに失敗しました。ファイルが破損していないか確認してください。',
+  unsupportedImage: '対応していない画像形式です。RGBA形式のPNG画像を選択してください。',
+  transparentImage:
+    '不透明なピクセルが見つかりません。透明部分以外（α>0）を含むPNG画像を選択してください。',
+};
+
+/** 画像読み込みの結果。成功なら FigureImage、失敗なら型付きエラー。 */
+export type ImageLoadResult =
+  { ok: true; image: FigureImage } | { ok: false; error: AnalysisError };
+
+/** エラー結果を組み立てる小ヘルパー。 */
+function fail(kind: ImageLoadErrorKind): ImageLoadResult {
+  return { ok: false, error: { kind, message: ERROR_MESSAGES[kind] } };
+}
+
+/**
+ * PNG ファイルかどうかを緩く判定する。
+ * MIME 型が空になる環境（一部の D&D 等）もあるため、拡張子も併せて許容する。
+ * 中身の厳密な検証は createImageBitmap のデコード可否に委ねる。
+ */
+function looksLikePng(file: File): boolean {
+  return file.type === 'image/png' || file.name.toLowerCase().endsWith('.png');
+}
+
+/**
+ * PNG ファイルを読み込み、RGBA の ImageData を持つ FigureImage を返す。
+ *
+ * 手順：PNG 判定 → createImageBitmap でデコード → Canvas へ描画して
+ * getImageData で RGBA ピクセルを取得 → 全透明チェック。
+ */
+export async function loadPngFile(file: File): Promise<ImageLoadResult> {
+  if (!looksLikePng(file)) {
+    return fail('unsupportedImage');
+  }
+
+  // createImageBitmap はネットワークを介さずローカルにデコードする（外部送信なし）。
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return fail('imageLoadFailed');
+  }
+
+  const width = bitmap.width;
+  const height = bitmap.height;
+  if (width === 0 || height === 0) {
+    bitmap.close();
+    return fail('imageLoadFailed');
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  // willReadFrequently: getImageData を前提とした描画であることを明示し、
+  // ブラウザに読み出し向けの内部表現を選ばせて性能低下を避ける。
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    bitmap.close();
+    return fail('imageLoadFailed');
+  }
+
+  ctx.drawImage(bitmap, 0, 0);
+  // 描画済みなので bitmap のリソースは早めに解放する（大きな画像でのメモリ節約）。
+  bitmap.close();
+
+  let imageData: ImageData;
+  try {
+    imageData = ctx.getImageData(0, 0, width, height);
+  } catch {
+    // 通常ローカル画像で汚染は起きないが、getImageData の失敗も握り潰さず扱う。
+    return fail('imageLoadFailed');
+  }
+
+  if (!hasVisiblePixels(imageData)) {
+    return fail('transparentImage');
+  }
+
+  return {
+    ok: true,
+    image: { fileName: file.name, imageData, width, height },
+  };
+}
