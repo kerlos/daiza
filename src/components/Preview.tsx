@@ -5,7 +5,7 @@
 // (3) 転倒シミュレーション（左右の限界姿勢）をトグルで重ね描く、(4) PNG のドラッグ
 // ＆ドロップを受け付ける、(5) ホイールズーム・ドラッグパン・Fit・100% の表示操作を
 // 提供する（TODO 9）、(6) 上端・左端に実寸(mm)ルーラーを重ねる（TODO 20-1）、
-// (7) 仕上がりを確認する完成予想図モードへ切り替える（TODO 22-2）。
+// (7) 仕上がりを確認する完成プレビューモードへ切り替える（TODO 22-2）。
 //
 // 図形の幾何は render/overlay.ts・render/simulation.ts（いずれも純粋ロジック）が
 // 画像ピクセル座標で算出し、本コンポーネントは role ごとの見た目（色・線種）を与えて
@@ -30,8 +30,8 @@ import { closedCurvePathData } from '@/utils/curve';
 import { radToDeg } from '@/utils/geometry';
 
 /**
- * 外形（カットライン）の塗り・線の色。完成予想図モードでは台座もこの色で描き、
- * アクリル板と台座が同じ素材の一体物に見えるようにする（SPEC「完成予想図モード」）。
+ * 外形（カットライン）の塗り・線の色。完成プレビューモードでは台座もこの色で描き、
+ * アクリル板と台座が同じ素材の一体物に見えるようにする（SPEC「完成プレビューモード」）。
  */
 const CONTOUR_FILL = 'rgba(148, 163, 184, 0.25)';
 const CONTOUR_STROKE = 'rgba(100, 116, 139, 0.8)';
@@ -58,7 +58,7 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
   // 転倒シミュレーション（左右の限界姿勢）の表示切替。常時重ねると主オーバーレイが
   // 埋もれるため、必要な時だけ見せられるようトグルにする（初期は非表示）。
   const [showSimulation, setShowSimulation] = useState(false);
-  // 完成予想図モード（仕上がり確認）の表示切替。表示だけの切替であり、解析・パラメータ・
+  // 完成プレビューモード（仕上がり確認）の表示切替。表示だけの切替であり、解析・パラメータ・
   // SVG エクスポートには一切影響しない（＝この state は描画分岐にのみ使う）。
   const [finishView, setFinishView] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -214,7 +214,7 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
               transform: `translate(${transform.tx}px, ${transform.ty}px) scale(${s})`,
             }}
           >
-            {/* 完成予想図モードでは画像をオーバーレイより前面へ出す。外形の半透明塗りは
+            {/* 完成プレビューモードでは画像をオーバーレイより前面へ出す。外形の半透明塗りは
                 そのまま描いたうえで不透明な絵柄がその上に載るため、塗りの見える範囲が
                 「カットライン領域 − 不透明領域」になる（SPEC「絵柄の上のオーバーレイを
                 無効化する」）。α をマスク化するより安く、半透明画素も素直に合成される。 */}
@@ -268,7 +268,7 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
                   ))}
 
                 {/* 外形（半透明）。塗りで領域を、細線で曲線カットラインを示す。板本体・首部・
-                    ツメを統合した 1 本のカットラインであり、完成予想図モードでもそのまま描く。 */}
+                    ツメを統合した 1 本のカットラインであり、完成プレビューモードでもそのまま描く。 */}
                 <path
                   d={contourPathD}
                   fill={CONTOUR_FILL}
@@ -277,7 +277,7 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
                 />
 
                 {/* 台座。上辺が台座上面。差込部・支持範囲より背面に置くため先に描く。
-                    通常は緑のハイライトだが、完成予想図モードでは仕上がりを見るため
+                    通常は緑のハイライトだが、完成プレビューモードでは仕上がりを見るため
                     カットラインと同色にそろえる。 */}
                 <rect
                   x={overlay.base.x}
@@ -289,7 +289,7 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
                   strokeWidth={1.5 / s}
                 />
 
-                {/* ここから下は解析表示モード専用のガイド。完成予想図モードでは
+                {/* ここから下は解析表示モード専用のガイド。完成プレビューモードでは
                     絵柄・カットライン・台座だけを見せるため一切描かない。 */}
                 {!finishView && (
                   <>
@@ -364,7 +364,7 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
             className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md border bg-background/80 p-1 shadow-sm backdrop-blur"
             onPointerDown={(event) => event.stopPropagation()}
           >
-            {/* 完成予想図モード切替。オーバーレイの見た目だけを切り替える（解析は再実行
+            {/* 完成プレビューモード切替。オーバーレイの見た目だけを切り替える（解析は再実行
                 されない）。オーバーレイが無い＝見せる仕上がりが無い間は無効化。 */}
             <Button
               variant="ghost"
@@ -372,14 +372,14 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
               onClick={() => setFinishView((v) => !v)}
               disabled={!overlay}
               className={cn(finishView && 'text-primary bg-primary/10')}
-              title="完成予想図"
-              aria-label="完成予想図"
+              title="完成プレビュー"
+              aria-label="完成プレビュー"
               aria-pressed={finishView}
             >
               <Eye />
             </Button>
             {/* 転倒シミュレーション表示切替。解析結果が無い間は対象が無いので無効化。
-                完成予想図モードではガイドを一切出さないためトグル自体を無効化する。 */}
+                完成プレビューモードではガイドを一切出さないためトグル自体を無効化する。 */}
             <Button
               variant="ghost"
               size="icon-sm"
