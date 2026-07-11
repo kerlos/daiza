@@ -1,8 +1,9 @@
-// 外形（輪郭）抽出：α>0 領域の外周を 1 本の閉ポリゴンとして取り出す。
+// 外形（輪郭）抽出とカットライン生成：α>0 領域の外周を閉ポリゴン群として取り出し、
+// 余白オフセット・自己交差除去・複数パーツ包絡・平滑化を経て 1 枚のカットラインへ整える。
 //
-// 用途はオーバーレイの「外形（半透明）」描画と SVG エクスポートの外形線。
-// Moore 近傍追跡（Moore-Neighbor Tracing）に Jacob の停止条件を組み合わせ、
-// ラスタ走査で最初に見つかる充填ピクセルを起点に外周を時計回りにたどる。
+// 用途はオーバーレイの「外形（半透明）」描画と SVG エクスポートの外形線。輪郭追跡は
+// Moore 近傍追跡（Moore-Neighbor Tracing）に Jacob の停止条件を組み合わせる。分離した
+// 複数パーツにも対応するため、まず 8 連結で連結成分へ分け、成分ごとに外周をたどる。
 // React には依存しない純粋ロジック。
 //
 // 設計判断：
@@ -12,10 +13,15 @@
 //    あたり最大 8 近傍を何度も参照するため、RGBA から都度 α を読むよりキャッシュ効率
 //    が良い。マスク構築（buildAlphaMask）は呼び出し側（pipeline）が重心走査と共有する
 //    ため、ここでは受け取るだけにして α 判定の全画素走査が二重にならないようにする。
-//  - 現状は単一輪郭（最初に見つかる連結成分の外周）を返す。穴あき・複数輪郭は
-//    型（Contour[]）ごと将来拡張する前提で、ここでは単一 Contour に留める。
+//  - 複数パーツは各 1 閉ポリゴンとして抽出し（extractContours）、カットライン化段階
+//    （buildCutline）で union（近接パーツの結合）と、なお分離したパーツ同士の最小幅ブリッジ
+//    連結により 1 枚のアクリル外形へまとめる（SPEC「複数パーツの連結」）。各パーツの輪郭は
+//    保ったまま連結するため、凸包のように全体を緩く包み込むことはしない。
+
+import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 
 import type { Contour, Point } from '@/model/types';
+import { convexHull, simplifyPolyline } from '@/utils/geometry';
 
 /**
  * 時計回り（下方向 +Y）8 近傍のインデックス → オフセット。
@@ -72,19 +78,6 @@ function directionIndex(dx: number, dy: number): number {
   }
 }
 
-/** ラスタ走査で最初の充填ピクセル（最上行・その中で最左）を探す。 */
-function findStart(mask: Uint8Array, width: number, height: number): Point | null {
-  for (let y = 0; y < height; y++) {
-    const rowOffset = y * width;
-    for (let x = 0; x < width; x++) {
-      if (mask[rowOffset + x] === 1) {
-        return { x, y };
-      }
-    }
-  }
-  return null;
-}
-
 /** Moore 追跡の 1 ステップの結果。次の外周画素と、その進入元（空きセル）。 */
 interface TraceStep {
   nx: number;
@@ -122,26 +115,19 @@ function findNextBoundary(
 }
 
 /**
- * α>0 領域の外形ポリゴン（ピクセル座標系）を抽出する。
+ * 起点 b0 から Moore 追跡で 1 つの連結成分の外周を時計回りにたどる。
  *
- * 入力は事前構築済みの α マスク（1=充填）と、その寸法。起点は上・左が空きである
- * ことが保証されるため、西（左）から進入したとみなして追跡を始める。停止は Jacob の
- * 条件：起点 b0 へ戻り、かつ次の一歩が最初の一歩 b1 と一致したとき閉じる。これにより
- * 起点を通過するだけの場合と、真に一周した場合を区別でき、頂点の重複なく閉ポリゴンを
- * 得られる。
- *
- * 全透明（充填なし）は空配列を返す。呼び出し側で解析不能として扱えるようにする。
+ * 起点は上・左が（その成分にとって）空きであることが呼び出し側で保証される前提で、
+ * 西（左）から進入したとみなして追跡を始める。停止は Jacob の条件：起点 b0 へ戻り、
+ * かつ次の一歩が最初の一歩 b1 と一致したとき閉じる。これにより起点を通過するだけの
+ * 場合と真に一周した場合を区別でき、頂点の重複なく閉ポリゴンを得られる。isFilled は
+ * 「その画素が対象成分に属するか」を返す述語で、単一マスク／成分ラベルのどちらでも使える。
  */
-export function extractContour(mask: Uint8Array, width: number, height: number): Contour {
-  const isFilled = (x: number, y: number): boolean =>
-    x >= 0 && x < width && y >= 0 && y < height && mask[y * width + x] === 1;
-
-  const start = findStart(mask, width, height);
-  if (!start) {
-    return [];
-  }
-
-  const b0 = start;
+function traceBoundary(
+  b0: Point,
+  isFilled: (x: number, y: number) => boolean,
+  maxSteps: number,
+): Contour {
   // 進入元は西の空きセル。ここから時計回りに最初の外周画素を探す。
   const firstStep = findNextBoundary(b0.x, b0.y, b0.x - 1, b0.y, isFilled);
   if (!firstStep) {
@@ -157,8 +143,6 @@ export function extractContour(mask: Uint8Array, width: number, height: number):
   let cx = firstStep.backX;
   let cy = firstStep.backY;
 
-  // 異常形状でも無限ループしないための上限。外周長は全画素周長を超えない。
-  const maxSteps = width * height * 4 + 8;
   for (let step = 0; step < maxSteps; step++) {
     const next = findNextBoundary(bx, by, cx, cy, isFilled);
     // Jacob の停止条件：起点に戻り、次の一歩が最初の一歩と一致したら一周完了。
@@ -177,4 +161,669 @@ export function extractContour(mask: Uint8Array, width: number, height: number):
   }
 
   return boundary;
+}
+
+/** 追跡の無限ループを防ぐ上限。外周長は全画素周長を超えない。 */
+function traceStepLimit(width: number, height: number): number {
+  return width * height * 4 + 8;
+}
+
+/** 連結成分ラベリングの結果：画素ごとのラベル（0=空き）と各成分の起点。 */
+interface LabeledComponents {
+  /** 画素 idx → 成分ラベル（1..count、0=空き）。 */
+  labels: Int32Array;
+  /** 成分ごとの起点（ラスタ走査で最初に現れた画素＝最上・最左）。index+1 がラベル。 */
+  seeds: Point[];
+}
+
+/**
+ * α マスクを 8 連結で連結成分に分け、各画素へラベルを振る。
+ *
+ * 8 連結を採るのは、斜めに接する画素を別パーツと誤認しないため（外周追跡の 8 近傍とも整合）。
+ * 各成分の起点はラスタ走査で最初に現れた画素なので、その西・北はその成分に属さないことが
+ * 保証され、外周追跡の開始条件（西から進入）を満たす。反復スタックで実装し、巨大画像でも
+ * 再帰スタック溢れを避ける。各画素は「ラベル付与時に 1 度だけ」push されるため、スタック
+ * 長は総画素数を超えない。
+ */
+function labelComponents(mask: Uint8Array, width: number, height: number): LabeledComponents {
+  const total = width * height;
+  const labels = new Int32Array(total);
+  const seeds: Point[] = [];
+  // 各画素は 1 度だけ積むので容量は総画素数で足りる（number[] より GC 負荷が軽い）。
+  const stack = new Int32Array(total);
+  let label = 0;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (mask[idx] !== 1 || labels[idx] !== 0) {
+        continue;
+      }
+      label++;
+      seeds.push({ x, y });
+      let sp = 0;
+      stack[sp++] = idx;
+      labels[idx] = label;
+      while (sp > 0) {
+        const cur = stack[--sp] ?? 0;
+        const cy = (cur / width) | 0;
+        const cx = cur - cy * width;
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = cy + dy;
+          if (ny < 0 || ny >= height) {
+            continue;
+          }
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) {
+              continue;
+            }
+            const nx = cx + dx;
+            if (nx < 0 || nx >= width) {
+              continue;
+            }
+            const nidx = ny * width + nx;
+            if (mask[nidx] === 1 && labels[nidx] === 0) {
+              labels[nidx] = label;
+              stack[sp++] = nidx;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { labels, seeds };
+}
+
+/**
+ * α>0 領域の外形を、分離した複数パーツも含めてすべて抽出する（各パーツ 1 閉ポリゴン）。
+ *
+ * SPEC「複数パーツの包絡」の前段。まず連結成分へ分け、成分ごとに外周を追跡する。追跡述語は
+ * 「その画素が対象成分に属するか（labels === 対象ラベル）」で、隣接する別パーツを巻き込まない。
+ * ポリゴンを成さない退化成分（面積を持たない 1〜2 画素の孤立ノイズ）は 3 頂点未満として捨て、
+ * 後段の余白オフセット・union（polygon-clipping）へ妥当な入力だけを渡す。
+ *
+ * 全透明（充填なし）や有効パーツ皆無なら空配列を返し、呼び出し側で透明画像として扱えるようにする。
+ */
+export function extractContours(mask: Uint8Array, width: number, height: number): Contour[] {
+  const { labels, seeds } = labelComponents(mask, width, height);
+  const maxSteps = traceStepLimit(width, height);
+  const contours: Contour[] = [];
+
+  for (let i = 0; i < seeds.length; i++) {
+    const seed = seeds[i];
+    if (!seed) {
+      continue;
+    }
+    const label = i + 1;
+    const isFilled = (x: number, y: number): boolean =>
+      x >= 0 && x < width && y >= 0 && y < height && labels[y * width + x] === label;
+    const contour = traceBoundary(seed, isFilled, maxSteps);
+    // 面積を持たない退化成分（孤立点・極小ノイズ）は外形として無意味なので捨てる。
+    if (contour.length >= 3) {
+      contours.push(contour);
+    }
+  }
+
+  return contours;
+}
+
+// ---------------------------------------------------------------------------
+// カットライン生成：抽出した複数パーツ外形を「余白オフセット → union（自己交差除去・
+// 近接パーツ結合）→ 残った分離パーツの最小幅ブリッジ連結 → 平滑化」して、実際に切り出す
+// アクリル外形（カットライン）へ整える。
+// SPEC「カットライン」節の手順。
+//
+// これらはパラメータ（余白 mm・平滑化強さ）に依存するため、画像不変の第 1 相
+// （extractContours）とは別に、パラメータ変更ごとに走る第 2 相（pipeline.runAnalysis）
+// から呼ばれる。頂点数は間引き済み外形（数百〜数千点）が入力なので O(頂点数) で軽い。
+
+/**
+ * Chaikin 反復で増えた頂点を間引く際の許容ずれ(px)。
+ * 平滑化は角を丸めるため頂点が指数的に増える。見た目をほぼ保てる 0.5px で間引き、
+ * 描画・SVG 文字列化を軽く保つ（第 1 相の 1px 間引きと役割は同じ）。
+ */
+const CUTLINE_SIMPLIFY_EPSILON_PX = 0.5;
+
+/** 閉ポリゴンの符号付き面積の 2 倍。符号で頂点の並び向き（CW/CCW）を判定する。 */
+function signedDoubleArea(points: readonly Point[]): number {
+  const n = points.length;
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    if (!a || !b) {
+      continue;
+    }
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return sum;
+}
+
+/**
+ * 辺 a→b の外向き単位法線を返す。
+ *
+ * 辺方向 d=(dx,dy) を -90° 回した (dy,-dx) が、並び向き orient（符号付き面積の符号）に
+ * 応じて外向きになる。これは座標系（画像は y 下向き）に依らず代数的に成り立つ規則で、
+ * orient を掛けることで CW/CCW どちらの外形でも一貫して外側を向く。零長辺は (0,0)。
+ */
+function edgeOutwardNormal(a: Point, b: Point, orient: number): Point {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const nx = dy * orient;
+  const ny = -dx * orient;
+  const len = Math.hypot(nx, ny);
+  if (len < 1e-9) {
+    return { x: 0, y: 0 };
+  }
+  return { x: nx / len, y: ny / len };
+}
+
+/**
+ * 閉ポリゴンを外側へ distancePx だけオフセットする。
+ *
+ * 各頂点を、前後 2 辺の外向き単位法線の平均方向へ移動させる（素朴なミターオフセット）。
+ * 余白（数 mm 相当）は形状の特徴量に対して十分小さいため、鋭い凹角での自己交差は実用上
+ * 問題にならず、後段の平滑化でさらに均される。distance が 0／非有限、または頂点数が
+ * 3 未満（面積を持たない）なら入力をそのまま返す。
+ */
+export function offsetContour(contour: readonly Point[], distancePx: number): Point[] {
+  const n = contour.length;
+  if (n < 3 || !Number.isFinite(distancePx) || distancePx === 0) {
+    return contour.slice();
+  }
+
+  const orient = signedDoubleArea(contour) >= 0 ? 1 : -1;
+  const out: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = contour[(i - 1 + n) % n];
+    const cur = contour[i];
+    const next = contour[(i + 1) % n];
+    if (!prev || !cur || !next) {
+      continue;
+    }
+    const nIn = edgeOutwardNormal(prev, cur, orient);
+    const nOut = edgeOutwardNormal(cur, next, orient);
+    let nx = nIn.x + nOut.x;
+    let ny = nIn.y + nOut.y;
+    const len = Math.hypot(nx, ny);
+    if (len < 1e-9) {
+      // 前後の法線がほぼ相殺（尖った折り返し）。片側の法線で代用して破綻を避ける。
+      nx = nOut.x;
+      ny = nOut.y;
+    } else {
+      nx /= len;
+      ny /= len;
+    }
+    out.push({ x: cur.x + nx * distancePx, y: cur.y + ny * distancePx });
+  }
+  return out;
+}
+
+/**
+ * 閉ポリゴンを Chaikin の角切り法で平滑化する（iterations 回反復）。
+ *
+ * 各辺を 1/4・3/4 の内分点 2 つへ置き換えて角を落とすため、反復ごとに輪郭が滑らかになる。
+ * SPEC「値を大きくするほど滑らか」に対応し、iterations=0 は素通し（無効）。反復ごとに頂点が
+ * 倍増するので、呼び出し側（buildCutline）で最後に間引いて頂点数を抑える。
+ */
+export function smoothContour(contour: readonly Point[], iterations: number): Point[] {
+  let points: Point[] = contour.slice();
+  const iters = Math.max(0, Math.floor(iterations));
+  for (let it = 0; it < iters && points.length >= 3; it++) {
+    const n = points.length;
+    const next: Point[] = [];
+    for (let i = 0; i < n; i++) {
+      const p = points[i];
+      const q = points[(i + 1) % n];
+      if (!p || !q) {
+        continue;
+      }
+      next.push({ x: p.x * 0.75 + q.x * 0.25, y: p.y * 0.75 + q.y * 0.25 });
+      next.push({ x: p.x * 0.25 + q.x * 0.75, y: p.y * 0.25 + q.y * 0.75 });
+    }
+    points = next;
+  }
+  return points;
+}
+
+/** Point[] を polygon-clipping の閉リング（Pair[]、始点=終点で閉じる）へ変換する。 */
+function toClosedRing(points: readonly Point[]): Ring {
+  const ring: Ring = points.map((p) => [p.x, p.y]);
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
+    ring.push([first[0], first[1]]);
+  }
+  return ring;
+}
+
+/** polygon-clipping のリング（Pair[]、閉じている）を Point[]（開いた頂点列）へ戻す。 */
+function ringToPoints(ring: Ring): Point[] {
+  const pts: Point[] = ring.map(([x, y]) => ({ x, y }));
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  if (pts.length > 1 && first && last && first.x === last.x && first.y === last.y) {
+    pts.pop();
+  }
+  return pts;
+}
+
+/** 全パーツの頂点を集めた凸包。union 破綻時・連結失敗時の安全な包絡フォールバック。 */
+function convexHullOfParts(parts: readonly Point[][]): Point[] {
+  const all: Point[] = [];
+  for (const part of parts) {
+    for (const p of part) {
+      all.push(p);
+    }
+  }
+  return convexHull(all);
+}
+
+/**
+ * ポリゴン群を union し、各結果ポリゴンの外輪（穴を除く外周）を頂点列で返す。
+ *
+ * 単一入力でも呼べる（素朴なミターオフセットが作った自己交差を単純多角形へ正規化する）。
+ * union が例外を投げた場合は呼び出し側で扱えるよう再スローする。3 頂点未満へ潰れた退化リングは捨てる。
+ */
+function unionOuterRings(polysPts: readonly Point[][]): Point[][] {
+  const polys: Polygon[] = polysPts.filter((p) => p.length >= 3).map((p) => [toClosedRing(p)]);
+  const first = polys[0];
+  if (!first) {
+    return [];
+  }
+  const merged: MultiPolygon =
+    polys.length === 1
+      ? polygonClipping.union(first)
+      : polygonClipping.union(first, ...polys.slice(1));
+
+  const rings: Point[][] = [];
+  for (const poly of merged) {
+    const outer = poly[0];
+    if (!outer) {
+      continue;
+    }
+    const pts = ringToPoints(outer);
+    if (pts.length >= 3) {
+      rings.push(pts);
+    }
+  }
+  return rings;
+}
+
+/** 2 点間の距離の 2 乗。ブリッジ探索は比較のみなので sqrt を省く。 */
+function distanceSquared(a: Point, b: Point): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+/** 点 p から線分 a→b への最近点。t を [0,1] にクランプして端点外へ出ないようにする。 */
+function closestPointOnSegment(p: Point, a: Point, b: Point): Point {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12) {
+    return { x: a.x, y: a.y };
+  }
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return { x: a.x + t * dx, y: a.y + t * dy };
+}
+
+/** 2 つの閉リング間の最短連結：一方の頂点から他方の辺への最近点対（連結部の端点）。 */
+interface RingLink {
+  /** リング A 側の端点。 */
+  a: Point;
+  /** リング B 側の端点。 */
+  b: Point;
+  /** 端点間の距離の 2 乗（連結の近さ＝MST の重み）。 */
+  gap2: number;
+}
+
+/**
+ * 2 つの閉リングの境界間で最も近い点対を求める（片方の頂点 × 他方の辺の総当たり）。
+ *
+ * 頂点同士だけでなく「頂点→辺の最近点」も見るため、辺の途中が最接近する場合も取りこぼさない。
+ * リングは間引き済み（数十〜数百点）でパーツ数も少ないため、O(Va×Vb) の総当たりで実用上十分。
+ */
+function closestBetweenRings(ringA: readonly Point[], ringB: readonly Point[]): RingLink {
+  const nA = ringA.length;
+  const nB = ringB.length;
+  let best: RingLink = { a: { x: 0, y: 0 }, b: { x: 0, y: 0 }, gap2: Number.POSITIVE_INFINITY };
+
+  // A の各頂点 × B の各辺。
+  for (let i = 0; i < nA; i++) {
+    const p = ringA[i];
+    if (!p) continue;
+    for (let j = 0; j < nB; j++) {
+      const s = ringB[j];
+      const e = ringB[(j + 1) % nB];
+      if (!s || !e) continue;
+      const q = closestPointOnSegment(p, s, e);
+      const gap2 = distanceSquared(p, q);
+      if (gap2 < best.gap2) best = { a: p, b: q, gap2 };
+    }
+  }
+  // B の各頂点 × A の各辺（端点の所属を保つよう a は常に A 側、b は常に B 側にする）。
+  for (let j = 0; j < nB; j++) {
+    const p = ringB[j];
+    if (!p) continue;
+    for (let i = 0; i < nA; i++) {
+      const s = ringA[i];
+      const e = ringA[(i + 1) % nA];
+      if (!s || !e) continue;
+      const q = closestPointOnSegment(p, s, e);
+      const gap2 = distanceSquared(p, q);
+      if (gap2 < best.gap2) best = { a: q, b: p, gap2 };
+    }
+  }
+  return best;
+}
+
+/**
+ * 連結部（ブリッジ）の矩形ポリゴンを作る。
+ *
+ * 端点対 a→b を中心線とし、幅 widthPx の帯（矩形）を張る。両端は各パーツ内部へ ext ぶん
+ * 延長して union で確実に重なるようにする（端点はパーツ境界上にあるため、延長で内部へ食い込む）。
+ * 端点が一致（既に重なり）していれば連結不要として null を返す。
+ */
+function bridgeRect(a: Point, b: Point, widthPx: number): Point[] | null {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) {
+    return null;
+  }
+  const ux = dx / len;
+  const uy = dy / len;
+  // 中心線に直交する単位ベクトル（帯の幅方向）。
+  const vx = -uy;
+  const vy = ux;
+  const half = widthPx / 2;
+  // 端点をパーツ内部へ延長する量。連結部幅ぶん延ばせば union の重なりを確実にできる。
+  const ext = Math.max(half, 1);
+  const sx = a.x - ux * ext;
+  const sy = a.y - uy * ext;
+  const ex = b.x + ux * ext;
+  const ey = b.y + uy * ext;
+  return [
+    { x: sx + vx * half, y: sy + vy * half },
+    { x: ex + vx * half, y: ey + vy * half },
+    { x: ex - vx * half, y: ey - vy * half },
+    { x: sx - vx * half, y: sy - vy * half },
+  ];
+}
+
+/**
+ * 分離した複数リングを連結するブリッジ矩形群を生成する（最小全域木＝連結の総延長最小）。
+ *
+ * すべてのパーツを 1 枚へつなぐには最低でも (パーツ数-1) 本の連結が要る。連結部の総延長が
+ * 最小になるよう、パーツ間の最短ギャップを辺重みとした最小全域木（Prim 法）を張り、その各辺を
+ * 幅 widthPx のブリッジ矩形にする。これにより「すべてのパーツを囲みつつ、連結部は最小幅で、
+ * 余分な材料を増やさない」外形になる。パーツ間の最近点対は事前に総当たりで求めてキャッシュする。
+ */
+function buildBridges(rings: readonly Point[][], widthPx: number): Point[][] {
+  const k = rings.length;
+  if (k < 2 || !(widthPx > 0)) {
+    return [];
+  }
+
+  // パーツ対ごとの最短連結を事前計算（対称なので上三角のみ）。
+  const links: (RingLink | null)[][] = Array.from({ length: k }, () =>
+    new Array<RingLink | null>(k).fill(null),
+  );
+  const linkOf = (i: number, j: number): RingLink => {
+    const a = i < j ? i : j;
+    const b = i < j ? j : i;
+    const cached = links[a]?.[b];
+    if (cached) return cached;
+    const ra = rings[a];
+    const rb = rings[b];
+    const link =
+      ra && rb
+        ? closestBetweenRings(ra, rb)
+        : { a: { x: 0, y: 0 }, b: { x: 0, y: 0 }, gap2: Number.POSITIVE_INFINITY };
+    const row = links[a];
+    if (row) row[b] = link;
+    return link;
+  };
+
+  // Prim 法：ノード 0 から木を育て、木内→木外で最短の辺を 1 本ずつ採用する。
+  const inTree = new Array<boolean>(k).fill(false);
+  inTree[0] = true;
+  const bridges: Point[][] = [];
+
+  for (let added = 1; added < k; added++) {
+    let bestI = -1;
+    let bestJ = -1;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < k; i++) {
+      if (!inTree[i]) continue;
+      for (let j = 0; j < k; j++) {
+        if (inTree[j]) continue;
+        const gap = linkOf(i, j).gap2;
+        if (gap < bestGap) {
+          bestGap = gap;
+          bestI = i;
+          bestJ = j;
+        }
+      }
+    }
+    if (bestJ < 0) break;
+    inTree[bestJ] = true;
+    const link = linkOf(bestI, bestJ);
+    const rect = bridgeRect(link.a, link.b, widthPx);
+    if (rect) bridges.push(rect);
+  }
+
+  return bridges;
+}
+
+/**
+ * オフセット済みパーツ群から 1 枚のアクリル外形（カットライン）を求める。
+ *
+ * SPEC「複数パーツの連結」「自己交差の回避」に対応する中核。手順は：
+ * (1) union で各パーツの自己交差を正規化し、余白で重なった近接パーツを結合する。
+ * (2) なお分離したパーツが残る場合、凸包で緩く包む代わりに、各パーツの輪郭を保ったまま
+ *     最小幅 minBridgeWidthPx のブリッジ（MST で総延長最小）で連結し、再度 union で 1 枚へまとめる。
+ * これにより外形は不透明領域の輪郭に沿い、連結部だけが最小幅の細い首になる。連結部を作れない
+ * （幅 0 等）／数値誤差で連結し切れない／union が例外を投げる異常時は、パーツを分断させない
+ * 安全網として凸包へフォールバックする（通常経路では発生しない）。
+ */
+function envelopeFromParts(parts: readonly Point[][], minBridgeWidthPx: number): Point[] {
+  if (parts.length === 0) {
+    return [];
+  }
+
+  let rings: Point[][];
+  try {
+    rings = unionOuterRings(parts);
+  } catch {
+    return convexHullOfParts(parts);
+  }
+
+  if (rings.length === 0) {
+    return convexHullOfParts(parts);
+  }
+  if (rings.length === 1) {
+    return rings[0] ?? [];
+  }
+
+  // 分離したパーツが複数残った。各輪郭を保ったまま最小幅ブリッジで連結する。
+  const bridges = buildBridges(rings, minBridgeWidthPx);
+  if (bridges.length === 0) {
+    // 連結部を張れない（幅が非正）。分断を避けるため凸包で包絡する。
+    return convexHullOfParts(parts);
+  }
+
+  try {
+    const connected = unionOuterRings([...rings, ...bridges]);
+    if (connected.length === 1) {
+      return connected[0] ?? [];
+    }
+    // 連結し切れなかった（数値誤差等）。全パーツを内包する安全網として凸包へ退避する。
+    return convexHullOfParts(parts);
+  } catch {
+    return convexHullOfParts(parts);
+  }
+}
+
+/**
+ * 抽出済みの複数パーツ外形から最終カットラインを生成する。
+ *
+ * SPEC「カットライン」節の手順を実装する：(1) 各パーツを余白ぶん外側へオフセット、
+ * (2) union で自己交差を除去し近接パーツを結合、なお分離したパーツは最小幅
+ * minBridgeWidthPx のブリッジで連結（残れば凸包で包絡）、(3) 平滑化、(4) 間引き。
+ * 曲線補完（(5)）は折れ線を保ったまま描画層（overlay/SVG）が頂点列から曲線パスを起こす。
+ * 以降の重心・台座計算・オーバーレイ・SVG はこの単一カットライン（が囲む領域）を外形として共有する。
+ *
+ * 有効パーツ（3 頂点以上）が無い退化入力では、最も頂点の多い生外形をそのまま返す（クラッシュ回避）。
+ */
+export function buildCutline(
+  rawContours: readonly Contour[],
+  marginPx: number,
+  smoothing: number,
+  minBridgeWidthPx: number,
+): Contour {
+  const offsetParts = rawContours
+    .filter((c) => c.length >= 3)
+    .map((c) => offsetContour(c, marginPx))
+    .filter((c) => c.length >= 3);
+
+  if (offsetParts.length === 0) {
+    const fallback = rawContours.reduce<Contour>((a, b) => (b.length > a.length ? b : a), []);
+    return fallback.slice();
+  }
+
+  const base = envelopeFromParts(offsetParts, minBridgeWidthPx);
+  const smoothed = smoothContour(base, smoothing);
+  return simplifyPolyline(smoothed, CUTLINE_SIMPLIFY_EPSILON_PX);
+}
+
+// ---------------------------------------------------------------------------
+// ツメ（差込口）一体化：差込口位置がカットラインの足元から離れている場合に、
+// ツメ（差込口幅ぶんの矩形）ぶんカットラインを下方向へ拡張して一体の外形にする。
+// SPEC「ツメとカットラインの一体化」節に対応する。
+
+/** 垂直線 x との交差のうち最も下（Y 最大）の下辺クロッシング。 */
+interface LowerCrossing {
+  /** 交点の Y。 */
+  y: number;
+  /** 交差した辺のインデックス（辺 i = 頂点 i → i+1）。 */
+  edge: number;
+}
+
+/**
+ * 閉ポリゴンと垂直線 x=lineX の交差のうち、最も下（Y 最大）＝外側下辺の交点を返す。
+ * 半開区間で straddle 判定し、共有頂点での二重計上を避ける。交差が無ければ null。
+ */
+function lowerCrossing(contour: readonly Point[], lineX: number): LowerCrossing | null {
+  const n = contour.length;
+  let best: LowerCrossing | null = null;
+  for (let i = 0; i < n; i++) {
+    const a = contour[i];
+    const b = contour[(i + 1) % n];
+    if (!a || !b) continue;
+    const straddles = (a.x <= lineX && lineX < b.x) || (b.x <= lineX && lineX < a.x);
+    if (!straddles) continue;
+    const t = (lineX - a.x) / (b.x - a.x);
+    const y = a.y + t * (b.y - a.y);
+    if (!best || y > best.y) {
+      best = { y, edge: i };
+    }
+  }
+  return best;
+}
+
+/** 頂点インデックス from → to（両端含む）を前方向（必要なら巻き戻し）に収集する。 */
+function collectForward(contour: readonly Point[], from: number, to: number): Point[] {
+  const n = contour.length;
+  const out: Point[] = [];
+  let i = from;
+  while (true) {
+    const p = contour[i];
+    if (p) out.push(p);
+    if (i === to) break;
+    i = (i + 1) % n;
+  }
+  return out;
+}
+
+/** インデックス範囲 [from, to]（前方向・両端含む）の平均 Y を求める。 */
+function averageY(contour: readonly Point[], from: number, to: number): number {
+  const pts = collectForward(contour, from, to);
+  if (pts.length === 0) return Number.NEGATIVE_INFINITY;
+  let sum = 0;
+  for (const p of pts) sum += p.y;
+  return sum / pts.length;
+}
+
+/**
+ * ツメをカットラインへ一体化する。
+ *
+ * X 区間 [xL, xR] の下辺を足元（footY）まで落とした矩形状のツメへ置き換えた新しい
+ * カットラインを返す。既にこの区間でカットラインが footY 付近まで届いている場合、または
+ * 区間端の下辺クロッシングが取れない（区間がカットライン外）場合は拡張不要としてそのまま返す。
+ *
+ * 手順：区間端の垂直線 x=xL・x=xR とカットライン下辺の交点 PL・PR を求め、その 2 点の
+ * 間にある「下辺の弧」（弧内頂点の平均 Y が大きい側）をツメ矩形の外周
+ * （PL→(xL,footY)→(xR,footY)→PR）で置き換える。区間内は元々アクリル本体の下端なので、
+ * 下辺だけを下げるこの置換は自己交差を生まない（複雑な凹形状での厳密な union は T19-6 で対応）。
+ */
+export function attachSlotTab(contour: Contour, xL: number, xR: number, footY: number): Contour {
+  const n = contour.length;
+  if (n < 3 || !(xL < xR) || !Number.isFinite(footY)) {
+    return contour.slice();
+  }
+
+  const cl = lowerCrossing(contour, xL);
+  const cr = lowerCrossing(contour, xR);
+  if (!cl || !cr) {
+    return contour.slice();
+  }
+
+  // 区間内で最も深い下辺位置。足元まで届いていれば（差が微小）拡張不要。
+  let deepest = Math.max(cl.y, cr.y);
+  for (const p of contour) {
+    if (p.x >= xL && p.x <= xR && p.y > deepest) deepest = p.y;
+  }
+  if (footY - deepest <= 1e-6) {
+    return contour.slice();
+  }
+
+  const iL = cl.edge;
+  const iR = cr.edge;
+  const PL: Point = { x: xL, y: cl.y };
+  const PR: Point = { x: xR, y: cr.y };
+  const tabL: Point = { x: xL, y: footY };
+  const tabR: Point = { x: xR, y: footY };
+
+  // 同一辺が両端の垂直線をまたぐ（下辺が 1 本の長い辺）場合は、その辺の途中に
+  // ツメを差し込む。辺の向き（左→右／右→左）に沿って PL・PR の順序を決める。
+  if (iL === iR) {
+    const a = contour[iL];
+    const b = contour[(iL + 1) % n];
+    if (!a || !b) return contour.slice();
+    const leftToRight = a.x <= b.x;
+    const insert = leftToRight ? [PL, tabL, tabR, PR] : [PR, tabR, tabL, PL];
+    const out: Point[] = [];
+    for (let i = 0; i < n; i++) {
+      const p = contour[i];
+      if (p) out.push(p);
+      if (i === iL) out.push(...insert);
+    }
+    return out;
+  }
+
+  // 2 本の弧のうち、下辺（平均 Y が大きい側）をツメ矩形で置き換える。
+  const forwardInteriorAvg = averageY(contour, (iL + 1) % n, iR);
+  const otherInteriorAvg = averageY(contour, (iR + 1) % n, iL);
+
+  if (forwardInteriorAvg >= otherInteriorAvg) {
+    // 前方向の弧（PL→…→PR）が下辺。ツメ＋反対側（上辺）の弧で再構成する。
+    return [PL, tabL, tabR, PR, ...collectForward(contour, (iR + 1) % n, iL)];
+  }
+  // 反対側の弧（PR→…→PL）が下辺。
+  return [PR, tabR, tabL, PL, ...collectForward(contour, (iL + 1) % n, iR)];
 }

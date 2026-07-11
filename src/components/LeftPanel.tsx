@@ -169,6 +169,7 @@ export function LeftPanel({
   onExportSvg,
 }: LeftPanelProps) {
   const safety = PARAMETER_CONSTRAINTS.safetyFactor;
+  const smoothing = PARAMETER_CONSTRAINTS.cutLineSmoothing;
   // ネイティブのファイル選択ダイアログは非表示 input を経由して開く。
   // 見た目は shadcn の Button に統一し、input 自体は UI から隠す。
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -229,14 +230,61 @@ export function LeftPanel({
             constraint={PARAMETER_CONSTRAINTS.thicknessMm}
             onValueChange={(thicknessMm) => onParametersChange({ thicknessMm })}
           />
-          <PresetNumberField
+          <NumberField
+            id="cutline-margin"
+            label="カットライン余白"
+            unit="mm"
+            value={parameters.cutLineMarginMm}
+            constraint={PARAMETER_CONSTRAINTS.cutLineMarginMm}
+            onValueChange={(cutLineMarginMm) => onParametersChange({ cutLineMarginMm })}
+          />
+
+          <div className="grid gap-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="cutline-smoothing">カットライン平滑化</Label>
+              {/* 平滑化は整数の強さ。0=無効を明示するため現在値を併記する。 */}
+              <span className="text-muted-foreground text-sm tabular-nums">
+                {parameters.cutLineSmoothing}
+              </span>
+            </div>
+            <Slider
+              id="cutline-smoothing"
+              min={smoothing.min}
+              max={smoothing.max}
+              step={smoothing.step}
+              value={[parameters.cutLineSmoothing]}
+              onValueChange={([cutLineSmoothing]) => {
+                if (cutLineSmoothing !== undefined) {
+                  onParametersChange({ cutLineSmoothing });
+                }
+              }}
+            />
+          </div>
+
+          <NumberField
+            id="min-bridge-width"
+            label="パーツ連結部の最小幅"
+            unit="mm"
+            value={parameters.minBridgeWidthMm}
+            constraint={PARAMETER_CONSTRAINTS.minBridgeWidthMm}
+            onValueChange={(minBridgeWidthMm) => onParametersChange({ minBridgeWidthMm })}
+          />
+
+          <NumberField
             id="slot-width"
             label="差込口幅"
             unit="mm"
             value={parameters.slotWidthMm}
-            presets={PARAMETER_PRESETS.slotWidthMm}
             constraint={PARAMETER_CONSTRAINTS.slotWidthMm}
             onValueChange={(slotWidthMm) => onParametersChange({ slotWidthMm })}
+          />
+          <NumberField
+            id="slot-offset"
+            label="差込口オフセット（正=右／負=左）"
+            unit="mm"
+            value={parameters.slotOffsetMm}
+            constraint={PARAMETER_CONSTRAINTS.slotOffsetMm}
+            onValueChange={(slotOffsetMm) => onParametersChange({ slotOffsetMm })}
           />
 
           <div className="grid gap-1.5">

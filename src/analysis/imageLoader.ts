@@ -36,6 +36,14 @@ function fail(kind: ImageLoadErrorKind): ImageLoadResult {
 }
 
 /**
+ * 読み込みごとに単調増加する画像 id を採番する。
+ * FigureImage.id は「どの読み込みか」を一意に指すだけでよく、値の意味は問わない。
+ * Web Worker 往復後の ImageData 復元で参照が変わっても id は据え置くことで、
+ * useAnalysis が「新規読み込み」と「中身の復元」を取り違えないようにする。
+ */
+let nextImageId = 0;
+
+/**
  * PNG ファイルかどうかを緩く判定する。
  * MIME 型が空になる環境（一部の D&D 等）もあるため、拡張子も併せて許容する。
  * 中身の厳密な検証は createImageBitmap のデコード可否に委ねる。
@@ -99,6 +107,6 @@ export async function loadPngFile(file: File): Promise<ImageLoadResult> {
 
   return {
     ok: true,
-    image: { fileName: file.name, imageData, width, height },
+    image: { id: nextImageId++, fileName: file.name, imageData, width, height },
   };
 }

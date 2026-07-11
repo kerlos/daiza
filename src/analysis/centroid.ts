@@ -1,22 +1,24 @@
-// 重心計算：α>0 を均一密度とみなし、画像モーメントで重心を求める。
+// 重心計算：カットラインが囲む領域を均一密度とみなし、面積モーメントで重心を求める。
 //
 // 解析パイプラインの中核の一つ。差込口探索（重心の真下）・台座幅（重心が支持
 // 範囲内か）・転倒角（重心高さ）はすべてこの重心を基準に計算するため、他の
 // 幾何計算に先立って確定させる。React には依存しない純粋ロジック。
 //
-// SPEC の定義：
-//   Cx = Σx / N,  Cy = Σy / N   （α>0 のピクセル座標の平均）
-// これは「各アクリルピクセルの密度を 1 とみなした 0 次・1 次モーメント」に等しい。
+// SPEC「カットライン」節に従い、外形は不透明境界そのものではなく余白オフセット＋
+// 平滑化を施したカットラインとし、重心もこのカットラインが囲む領域に対して求める。
+// 領域を均一密度とみなすと、面積モーメントによる重心はピクセル平均 Cx=Σx/N,
+// Cy=Σy/N（N＝領域の画素数）の連続版に等しく、SPEC の重心定義と整合する。
 
 import type { Centroid, Point } from '@/model/types';
 import { pixelPointToMm } from '@/analysis/scale';
 
 /**
- * 重心のピクセル座標成分（実寸換算前の画像不変量）。
+ * 重心のピクセル座標成分（実寸換算前）。
  *
- * ピクセル走査の結果は mm/px スケール（＝フィギュア高さパラメータ）に依存しない
- * ため、mm 換算と分離して保持する。これにより「画像が変わった時だけ走査し、
- * パラメータ変更では mm 換算だけをやり直す」二相構成（pipeline）を可能にする。
+ * ピクセル座標での重心は mm/px スケール（＝フィギュア高さパラメータ）に依存しない
+ * ため、mm 換算と分離して保持する。カットライン自体は余白パラメータに依存するので
+ * 重心計算は第 2 相（pipeline.runAnalysis）で行うが、mm 換算だけはさらに toCentroid で
+ * 切り出し、スケールのみ変化した場合の再利用余地を残す。
  */
 export interface CentroidPixel {
   pixel: Point;
@@ -24,50 +26,53 @@ export interface CentroidPixel {
 }
 
 /**
- * α マスクからアクリル（α>0）ピクセルの重心（ピクセル座標）を求める。
+ * 閉ポリゴン（カットライン）が囲む領域の重心（ピクセル座標）を面積モーメントで求める。
  *
- * 1 パス走査で個数 N（0 次モーメント）と座標和 Σx, Σy（1 次モーメント）を
- * 累積し、最後に平均を取る。密度は一律 1 のため重み付けは不要で、この単純和で
- * SPEC の Cx=Σx/N, Cy=Σy/N がそのまま得られる。
+ * 多角形の重心公式（0 次モーメント＝面積、1 次モーメント＝面積×重心）を 1 パスで
+ * 累積する。均一密度の領域重心なので、SPEC の Cx=Σx/N, Cy=Σy/N を「囲む領域全体」に
+ * 対して評価したものに等しい。並び向き（CW/CCW）は符号として現れるが、比を取る過程で
+ * 打ち消されるため向きに依らず正しい重心が得られる。pixelCount には領域面積(px²)を持たせる。
  *
- * 入力は RGBA ではなく事前構築済みの 1 バイト/画素マスク（buildAlphaMask）。輪郭
- * 抽出と同じマスクを共有することで、3000px 級でも α 判定の全画素走査を 1 回に
- * まとめられ、内側ループは連続メモリの 1 バイト読み＋加算だけに保てる。行オフセットは
- * 外側で更新する。
- *
- * 全透明（N=0）は本来 imageLoader が読み込み段階で弾くが、単体でも安全に扱える
- * よう null を返し、呼び出し側が例外なくエラー表示へマッピングできるようにする。
+ * 面積がほぼ 0（頂点数不足・一直線など退化形状）の場合は面積重心が定義できないため、
+ * 頂点座標の平均で代用する。頂点が皆無なら計算対象が無いので null を返し、呼び出し側が
+ * 例外なくエラー表示へマッピングできるようにする。
  */
-export function computeCentroidFromMask(
-  mask: Uint8Array,
-  width: number,
-  height: number,
-): CentroidPixel | null {
-  let sumX = 0;
-  let sumY = 0;
-  let count = 0;
-
-  for (let y = 0; y < height; y++) {
-    // 行頭のマスクオフセット。内側ループでは列分だけ加算する。
-    const rowOffset = y * width;
-    for (let x = 0; x < width; x++) {
-      // マスクは α>0 を 1 に畳んだ 1 バイト値。noUncheckedIndexedAccess 下では
-      // number | undefined になるため ?? 0 で丸めてから判定する。
-      if ((mask[rowOffset + x] ?? 0) === 1) {
-        sumX += x;
-        sumY += y;
-        count++;
-      }
-    }
-  }
-
-  if (count === 0) {
+export function polygonCentroid(polygon: readonly Point[]): CentroidPixel | null {
+  const n = polygon.length;
+  if (n === 0) {
     return null;
   }
 
+  let doubleArea = 0;
+  let cxAcc = 0;
+  let cyAcc = 0;
+  for (let i = 0; i < n; i++) {
+    const p = polygon[i];
+    const q = polygon[(i + 1) % n];
+    if (!p || !q) {
+      continue;
+    }
+    const cross = p.x * q.y - q.x * p.y;
+    doubleArea += cross;
+    cxAcc += (p.x + q.x) * cross;
+    cyAcc += (p.y + q.y) * cross;
+  }
+
+  // 面積が消える退化形状は面積重心が発散するため、頂点平均へフォールバックする。
+  if (Math.abs(doubleArea) < 1e-9) {
+    let sumX = 0;
+    let sumY = 0;
+    for (const point of polygon) {
+      sumX += point.x;
+      sumY += point.y;
+    }
+    return { pixel: { x: sumX / n, y: sumY / n }, pixelCount: 0 };
+  }
+
   return {
-    pixel: { x: sumX / count, y: sumY / count },
-    pixelCount: count,
+    // 重心 = 1 次モーメント / (3×2×面積)。doubleArea = 2×面積 なので 3×doubleArea で割る。
+    pixel: { x: cxAcc / (3 * doubleArea), y: cyAcc / (3 * doubleArea) },
+    pixelCount: Math.abs(doubleArea) / 2,
   };
 }
 
@@ -75,7 +80,7 @@ export function computeCentroidFromMask(
  * ピクセル重心へ実寸(mm)座標を付与して完成形の Centroid にする。
  *
  * mm 換算はスケール（mm/px）に依存する軽量な写像で、パラメータ変更のたびに
- * やり直しても支障がない。重いピクセル走査（computeCentroidFromMask）とは分離し、
+ * やり直しても支障がない。面積重心の算出（polygonCentroid）とは分離し、
  * ここではその結果を受けて mm を足すだけに留める。
  */
 export function toCentroid(base: CentroidPixel, mmPerPixel: number): Centroid {

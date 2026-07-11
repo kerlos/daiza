@@ -27,7 +27,14 @@ export interface AppState {
 export const DEFAULT_PARAMETERS: AnalysisParameters = {
   figureHeightMm: 160,
   thicknessMm: 3,
+  // 余白は SPEC 既定の 3mm。平滑化は「最小（無効）」から始め、UI で強められるようにする。
+  cutLineMarginMm: 3,
+  cutLineSmoothing: 0,
+  // 分離パーツ連結部の最小幅。板厚（既定 3mm）と同程度を既定とし、細すぎる連結を防ぐ。
+  minBridgeWidthMm: 3,
   slotWidthMm: 5,
+  // 差込口は既定で重心の真下（オフセット 0）。
+  slotOffsetMm: 0,
   safetyFactor: 1.3,
   baseMarginMm: 5,
 };
@@ -39,20 +46,25 @@ export const DEFAULT_PARAMETERS: AnalysisParameters = {
 export const PARAMETER_CONSTRAINTS = {
   figureHeightMm: { min: 1, max: 2000, step: 1 },
   thicknessMm: { min: 0.1, max: 20, step: 0.1 },
+  cutLineMarginMm: { min: 0, max: 10, step: 0.5 },
+  cutLineSmoothing: { min: 0, max: 5, step: 1 },
+  // 連結部は 0 幅だと union で結合できないため下限を正値にする。
+  minBridgeWidthMm: { min: 0.5, max: 20, step: 0.5 },
   slotWidthMm: { min: 0.1, max: 50, step: 0.1 },
+  // オフセットは左右対称に振れるよう負値も許容する（正=右／負=左）。
+  slotOffsetMm: { min: -50, max: 50, step: 0.5 },
   safetyFactor: { min: 1.0, max: 2.0, step: 0.1 },
   baseMarginMm: { min: 0, max: 30, step: 1 },
 } as const satisfies Record<keyof AnalysisParameters, { min: number; max: number; step: number }>;
 
 /**
  * 選択式で提示する標準値プリセット。
- * 板厚・差込口幅はアクリル板の一般的な規格値が決まっているため、SPEC の例
- * （板厚 2/3/5mm・差込口幅 5/6/7mm）を既定選択肢とする。これらに無い値は UI 側で
- * 「カスタム」入力へフォールバックできるようにし、規格外の値も許容する。
+ * 板厚はアクリル板の一般的な規格値（SPEC の例 2/3/5mm）が決まっているため既定選択肢とする。
+ * これらに無い値は UI 側で「カスタム」入力へフォールバックできるようにし、規格外の値も許容する。
+ * 差込口幅は SPEC 改訂によりプリセットを廃止し、数値入力のみとした（ここには含めない）。
  */
 export const PARAMETER_PRESETS = {
   thicknessMm: [2, 3, 5],
-  slotWidthMm: [5, 6, 7],
 } as const satisfies Partial<Record<keyof AnalysisParameters, readonly number[]>>;
 
 /** 初期状態。画像未読み込みの待機状態から始まる。 */
@@ -71,6 +83,7 @@ export const initialAppState: AppState = {
 export type AppAction =
   | { type: 'setImage'; image: FigureImage }
   | { type: 'clearImage' }
+  | { type: 'restoreImageData'; imageData: ImageData }
   | { type: 'updateParameters'; parameters: Partial<AnalysisParameters> }
   | { type: 'analysisStarted' }
   | { type: 'analysisSucceeded'; result: AnalysisResult }
@@ -100,6 +113,19 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         result: null,
         status: 'idle',
         error: null,
+      };
+
+    case 'restoreImageData':
+      // Web Worker へ転送した ImageData（メインスレッド側は detach 済み）を、解析後に
+      // 転送で戻ったバッファから再構築して差し戻す。id は据え置き、中身（imageData）だけを
+      // 入れ替える。これは新規読み込みではないので result/status/error は変更しない。
+      // 画像が無い（復元前に破棄された）場合は何もしない。
+      if (!state.image) {
+        return state;
+      }
+      return {
+        ...state,
+        image: { ...state.image, imageData: action.imageData },
       };
 
     case 'updateParameters':

@@ -93,9 +93,9 @@ export function buildOverlayShapes(result: AnalysisResult): OverlayShapes {
     x: slot.centerXPixel - slot.widthPixel / 2,
     y: slot.yPixel,
     width: slot.widthPixel,
-    // フィギュア下端から差込 Y までの縦帯として可視化する。差込口探索（TODO 10）が
-    // 下端付近に yPixel を置くため、下端までの範囲を差込口の位置として示す。
-    height: Math.max(0, baselineY - slot.yPixel),
+    // 差込口（ツメ）は上端 yPixel から足元 bottomYPixel（カットライン最下端）までの縦帯。
+    // カットラインは余白ぶん画像下端より下へ広がり得るため、画像下端ではなくツメ下端を使う。
+    height: Math.max(0, slot.bottomYPixel - slot.yPixel),
   };
 
   // 台座幅は実寸(mm)。ピクセルへ戻し、差込口中心に合わせて左右対称に配置する。

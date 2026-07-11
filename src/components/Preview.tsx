@@ -15,14 +15,16 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { ImageOff, Maximize2, Minus, Plus, RotateCw, Scan } from 'lucide-react';
+import { ImageOff, Loader2, Maximize2, Minus, PersonStanding, Plus, Scan } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { buildOverlayShapes } from '@/render/overlay';
 import { buildSimulationShapes } from '@/render/simulation';
-import { useViewport } from '@/hooks/useViewport';
+import { useViewport, type ContentBox } from '@/hooks/useViewport';
+import type { AnalysisStatus } from '@/model/state';
 import type { AnalysisResult, FigureImage } from '@/model/types';
 import { cn } from '@/lib/utils';
+import { closedCurvePathData } from '@/utils/curve';
 import { radToDeg } from '@/utils/geometry';
 
 export interface PreviewProps {
@@ -30,11 +32,13 @@ export interface PreviewProps {
   image: FigureImage | null;
   /** 直近の解析結果。あればオーバーレイを描画する。未解析・失敗時は null。 */
   result?: AnalysisResult | null;
+  /** 解析の進行状態。'analyzing' の間は解析中インジケータを重ねる。 */
+  status?: AnalysisStatus;
   /** ドロップされた PNG ファイルを通知する。未指定ならドロップは受け付けない。 */
   onImageFile?: (file: File) => void;
 }
 
-export function Preview({ image, result, onImageFile }: PreviewProps) {
+export function Preview({ image, result, status, onImageFile }: PreviewProps) {
   // ドラッグ中はドロップ可能であることを視覚的に示すためのフラグ。
   const [isDragOver, setIsDragOver] = useState(false);
   // 転倒シミュレーション（左右の限界姿勢）の表示切替。常時重ねると主オーバーレイが
@@ -45,7 +49,50 @@ export function Preview({ image, result, onImageFile }: PreviewProps) {
   // 読み込みハンドラが無ければ D&D は無効。ハンドラの有無で振る舞いを分ける。
   const dropEnabled = Boolean(onImageFile);
 
-  // 表示操作（ズーム/パン/Fit/100%）。コンテンツ寸法（画像の自然サイズ）を渡す。
+  // オーバーレイ図形は解析結果が変わったときだけ再構築する（不要な再計算の抑制）。
+  const overlay = useMemo(() => (result ? buildOverlayShapes(result) : null), [result]);
+
+  // 転倒姿勢も同様に結果が変わったときだけ再構築する。トグル OFF でも構築コストは
+  // 軽い（支点 2 点の算出のみ）ため result を唯一の依存とし、描画側で表示を出し分ける。
+  const simulation = useMemo(() => (result ? buildSimulationShapes(result) : null), [result]);
+
+  // Fit/100% が収める内容範囲。画像だけでなくカットライン（余白で画像枠外へ広がり得る）や
+  // 差込口・台座・支持範囲を含む外接矩形にすることで、余白を増やしても見切れないようにする
+  // （SPEC「表示範囲（見切れ防止）」）。解析前は画像そのものを範囲とする。
+  const contentBox = useMemo<ContentBox | null>(() => {
+    if (!image) {
+      return null;
+    }
+    if (!overlay) {
+      return { x: 0, y: 0, width: image.width, height: image.height };
+    }
+    // 画像枠を初期範囲とし、各オーバーレイ要素の外接点で広げる。
+    let minX = 0;
+    let minY = 0;
+    let maxX = image.width;
+    let maxY = image.height;
+    const include = (x: number, y: number): void => {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    };
+    for (const p of overlay.contour.points) {
+      include(p.x, p.y);
+    }
+    include(overlay.slot.x, overlay.slot.y);
+    include(overlay.slot.x + overlay.slot.width, overlay.slot.y + overlay.slot.height);
+    include(overlay.base.x, overlay.base.y);
+    include(overlay.base.x + overlay.base.width, overlay.base.y + overlay.base.height);
+    include(overlay.support.from.x, overlay.support.from.y);
+    include(overlay.support.to.x, overlay.support.to.y);
+    include(overlay.plumb.from.x, overlay.plumb.from.y);
+    include(overlay.plumb.to.x, overlay.plumb.to.y);
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }, [image, overlay]);
+
+  // 表示操作（ズーム/パン/Fit/100%）。自動フィットは画像の同一性（id）で制御し、
+  // パラメータ変更（box の変化）ではユーザーのズーム/パンを保つ。
   const {
     containerRef,
     transform,
@@ -57,7 +104,7 @@ export function Preview({ image, result, onImageFile }: PreviewProps) {
     actualSize,
     zoomIn,
     zoomOut,
-  } = useViewport(image?.width ?? null, image?.height ?? null);
+  } = useViewport(contentBox, image?.id ?? null);
 
   // 画像が変わったときだけ Canvas へ等倍で描き直す。putImageData は等倍描画のため
   // Canvas 要素は自然解像度で持ち、拡縮は stage の transform に委ねる。
@@ -75,12 +122,13 @@ export function Preview({ image, result, onImageFile }: PreviewProps) {
     ctx.putImageData(image.imageData, 0, 0);
   }, [image]);
 
-  // オーバーレイ図形は解析結果が変わったときだけ再構築する（不要な再計算の抑制）。
-  const overlay = useMemo(() => (result ? buildOverlayShapes(result) : null), [result]);
-
-  // 転倒姿勢も同様に結果が変わったときだけ再構築する。トグル OFF でも構築コストは
-  // 軽い（支点 2 点の算出のみ）ため result を唯一の依存とし、描画側で表示を出し分ける。
-  const simulation = useMemo(() => (result ? buildSimulationShapes(result) : null), [result]);
+  // 外形カットラインの曲線パス（d 属性）。折れ線ではなく Catmull-Rom で曲線補完して
+  // 描く（SPEC「曲線補完」）。ズーム/パンのたびに再レンダーされるため、JSX から切り出して
+  // overlay 変化時のみ再計算する。主外形・転倒シミュレーション（2 姿勢）で同じパスを共有する。
+  const contourPathD = useMemo(
+    () => (overlay ? closedCurvePathData(overlay.contour.points) : ''),
+    [overlay],
+  );
 
   // 線幅・半径・破線は「画像 px を stage の scale で割った値」で指定することで、
   // 拡縮後の画面上サイズを一定に保つ（stage 側で scale 倍されるため相殺される）。
@@ -139,7 +187,9 @@ export function Preview({ image, result, onImageFile }: PreviewProps) {
             <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
             {overlay && (
               <svg
-                className="pointer-events-none absolute inset-0 h-full w-full"
+                // overflow-visible：カットラインが画像枠（viewBox）外へ広がっても
+                // 見切れさせない（SPEC「見切れ防止」）。stage 外は外周コンテナが切り取る。
+                className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
                 viewBox={`0 0 ${image.width} ${image.height}`}
               >
                 {/* 転倒シミュレーション（限界姿勢）。主オーバーレイに埋もれないよう
@@ -153,8 +203,8 @@ export function Preview({ image, result, onImageFile }: PreviewProps) {
                       // 符号付き回転量はラジアンで持つため度へ直して rotate に渡す。
                       transform={`rotate(${radToDeg(pose.angleRad)} ${pose.pivot.x} ${pose.pivot.y})`}
                     >
-                      <polygon
-                        points={overlay.contour.points.map((p) => `${p.x},${p.y}`).join(' ')}
+                      <path
+                        d={contourPathD}
                         fill="rgba(249, 115, 22, 0.08)"
                         stroke="rgba(249, 115, 22, 0.5)"
                         strokeWidth={1 / s}
@@ -179,9 +229,9 @@ export function Preview({ image, result, onImageFile }: PreviewProps) {
                     </g>
                   ))}
 
-                {/* 外形（半透明）。塗りで領域を、細線で輪郭を示す。 */}
-                <polygon
-                  points={overlay.contour.points.map((p) => `${p.x},${p.y}`).join(' ')}
+                {/* 外形（半透明）。塗りで領域を、細線で曲線カットラインを示す。 */}
+                <path
+                  d={contourPathD}
                   fill="rgba(148, 163, 184, 0.25)"
                   stroke="rgba(100, 116, 139, 0.8)"
                   strokeWidth={1 / s}
@@ -261,7 +311,7 @@ export function Preview({ image, result, onImageFile }: PreviewProps) {
               aria-label="転倒シミュレーション"
               aria-pressed={showSimulation}
             >
-              <RotateCw />
+              <PersonStanding />
             </Button>
             <Button variant="ghost" size="icon-sm" onClick={zoomOut} title="縮小" aria-label="縮小">
               <Minus />
@@ -298,6 +348,20 @@ export function Preview({ image, result, onImageFile }: PreviewProps) {
               <Maximize2 />
             </Button>
           </div>
+
+          {/* 解析中インジケータ。重い第 1 相は Web Worker で走るため UI は固まらないが、
+              結果が出るまで待ちであることを明示する（SPEC「解析中であることを表示する」）。
+              画素は触らず transform にも乗らない固定オーバーレイとして中央へ重ねる。 */}
+          {status === 'analyzing' && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="text-muted-foreground bg-background/70 pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 backdrop-blur-sm"
+            >
+              <Loader2 className="size-8 animate-spin" />
+              <p className="text-sm font-medium">解析中…</p>
+            </div>
+          )}
         </>
       ) : (
         <div className="text-muted-foreground flex flex-col items-center gap-2 text-center">

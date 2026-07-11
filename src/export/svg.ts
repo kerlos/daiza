@@ -11,6 +11,7 @@
 // viewBox の数値をそのまま mm とみなす）ため、印刷・CAD 取り込み時に実寸となる。
 
 import type { AnalysisResult, Point } from '@/model/types';
+import { closedCurvePathData } from '@/utils/curve';
 
 /** 図形を配置する余白(mm)。viewBox の外周に取り、線が縁で切れないようにする。 */
 const MARGIN_MM = 5;
@@ -62,13 +63,15 @@ function buildGeometry(result: AnalysisResult): SvgGeometry {
 
   const contourMm = contour.map((p) => ({ x: p.x * mmPerPixel, y: p.y * mmPerPixel }));
 
-  // 差込口：中心 X・幅は mm を直接使い、縦は差込 Y から足元までの帯（overlay と同義）。
+  // 差込口（ツメ）：中心 X・幅は mm を直接使い、縦は上端 yPixel から下端 bottomYPixel
+  // （カットライン足元）までの帯（overlay と同義）。拡張後の外形と一体でカットされる。
   const slotYMm = slot.yPixel * mmPerPixel;
+  const slotBottomYMm = slot.bottomYPixel * mmPerPixel;
   const slotRect: RectMm = {
     x: slot.centerXMm - slot.widthMm / 2,
     y: slotYMm,
     width: slot.widthMm,
-    height: Math.max(0, baselineYMm - slotYMm),
+    height: Math.max(0, slotBottomYMm - slotYMm),
   };
 
   // 台座：差込口中心を軸に左右対称。上辺を足元に合わせ、奥行ぶん下へ伸ばす。
@@ -104,11 +107,6 @@ function computeViewBox(geometry: SvgGeometry): RectMm {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
-/** ポリゴン頂点列を SVG polygon の points 属性文字列へ変換する。 */
-function toPointsAttr(points: readonly Point[]): string {
-  return points.map((p) => `${fmt(p.x)},${fmt(p.y)}`).join(' ');
-}
-
 /** 矩形を SVG rect 要素文字列へ変換する。 */
 function rectElement(rect: RectMm, attrs: string): string {
   return `<rect x="${fmt(rect.x)}" y="${fmt(rect.y)}" width="${fmt(rect.width)}" height="${fmt(rect.height)}" ${attrs} />`;
@@ -132,8 +130,9 @@ export function generateSvg(result: AnalysisResult): string {
 
   const viewBoxAttr = `${fmt(viewBox.x)} ${fmt(viewBox.y)} ${fmt(viewBox.width)} ${fmt(viewBox.height)}`;
 
+  // 外形（カットライン）は折れ線ではなく曲線補完した path（C コマンド）で出力する（SPEC 要件）。
   const contourEl =
-    `<polygon points="${toPointsAttr(geometry.contour)}" ` +
+    `<path d="${closedCurvePathData(geometry.contour, fmt)}" ` +
     `fill="none" stroke="#374151" ${strokeAttr} />`;
   const slotEl = rectElement(geometry.slot, `fill="none" stroke="#2563eb" ${strokeAttr}`);
   const baseEl = rectElement(geometry.base, `fill="none" stroke="#16a34a" ${strokeAttr}`);

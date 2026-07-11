@@ -1,131 +1,132 @@
-// 差込口探索：画像最下部から、差込口幅が完全に収まる範囲を探して位置を決める。
+// 差込口配置：差込口（ツメ）中心を「重心X + 差込口オフセット」に置く。
 //
-// アクリルフィギュアは下端の「タブ」を台座のスリット（差込口）へ挿し込む。
-// スリットを切る位置には、差込口幅ぶんのアクリルが隙間なく存在していなければ
-// タブが痩せて折れてしまう。そこで「差込口幅が連続した充填領域に完全に収まる」
-// ことを候補の必要条件とする。React には依存しない純粋ロジック。
+// アクリルフィギュアは下端の「ツメ」を台座のスリット（差込口）へ挿し込む。SPEC の
+// 改訂により、差込口は画像最下部の充填スパンから探索するのではなく、
 //
-// SPEC の定義：
-//  - 画像最下部から探索する（＝できるだけ下端でタブを取る）。
-//  - 差込口幅が完全に収まる範囲のみ候補とする。
-//  - 候補が複数あるときは「重心の真下に最も近い位置」を採用する。
+//   差込口中心 X = 重心X + 差込口オフセット
 //
-// しきい値は imageLoader・centroid・contour と同じ「α>0 を充填」で統一する。
+// で決める。ツメは基本的に重心の真下へ置き、左右方向の微調整だけをオフセットで行う。
+//
+// ツメの縦位置は「カットライン（アクリル外形）の最下端＝足元」に下端を合わせる。ツメが
+// 本体（既存カットライン）から離れている（差込口X の位置でカットラインが足元まで届いて
+// いない）場合は、呼び出し側（pipeline）が analysis/contour の attachSlotTab でカットラインを
+// 下方向へ拡張して一体化する。ここではその判断材料となる縦帯（上端・下端）を返す。
+//
+// React には依存しない純粋ロジック。座標は画像左上原点・下方向 +Y。
 
-import type { Centroid, SlotResult } from '@/model/types';
+import type { Centroid, Contour, SlotResult } from '@/model/types';
 import { pixelLengthToMm } from '@/analysis/scale';
-import { clamp } from '@/utils/geometry';
-import { isAcrylicAlpha } from '@/utils/image';
 
-/** 1 行内で連続して充填されている列の範囲（両端 inclusive のピクセル列番号）。 */
-interface Span {
-  start: number;
-  end: number;
+/** ツメ縦帯の最小表示高さを決める、カットライン縦幅に対する割合。 */
+const MIN_TAB_BAND_RATIO = 0.03;
+
+/** カットラインの縦方向レンジ（最上端・最下端 Y、ピクセル）。 */
+interface VerticalExtent {
+  minY: number;
+  maxY: number;
+}
+
+/** カットライン頂点列の Y レンジを 1 パスで求める（spread を避け巨大頂点列でも安全）。 */
+function verticalExtent(contour: Contour): VerticalExtent {
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const p of contour) {
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minY, maxY };
 }
 
 /**
- * 指定行の充填スパン（α>0 が連続する区間）を左から順に列挙する。
- * 行を 1 パス走査し、充填の立ち上がり／立ち下がりで区間を確定する。差込口は
- * 「途切れのない一続きの材料」に収める必要があるため、連結した区間の単位で扱う。
+ * X 区間 [xL, xR] における、カットライン下辺の最も深い（Y 最大）位置を求める。
+ *
+ * 区間内の頂点に加え、区間端の垂直線 x=xL / x=xR とカットラインの交点も考慮する
+ * （差込口幅が狭く区間内に頂点が無い場合を取りこぼさないため）。この値が足元
+ * （カットライン最下端）から離れているほど、ツメは本体から浮いており拡張が要る。
  */
-function filledSpansInRow(data: Uint8ClampedArray, width: number, y: number): Span[] {
-  const spans: Span[] = [];
-  const rowOffset = y * width * 4;
-  // 充填ラン開始列。-1 は「現在ラン外」を表す番兵。
-  let runStart = -1;
-  for (let x = 0; x < width; x++) {
-    // α（RGBA の 4 番目）のみ参照。noUncheckedIndexedAccess 下では
-    // number | undefined になるため ?? 0 で丸めて判定する。α>0 の規則は共有する。
-    const alpha = data[rowOffset + x * 4 + 3] ?? 0;
-    if (isAcrylicAlpha(alpha)) {
-      if (runStart < 0) runStart = x;
-    } else if (runStart >= 0) {
-      spans.push({ start: runStart, end: x - 1 });
-      runStart = -1;
+function deepestBoundaryInRange(contour: Contour, xL: number, xR: number): number {
+  let deepest = Number.NEGATIVE_INFINITY;
+
+  // 区間内の頂点。
+  for (const p of contour) {
+    if (p.x >= xL && p.x <= xR && p.y > deepest) {
+      deepest = p.y;
     }
   }
-  // 行末で開いたままのランを閉じる。
-  if (runStart >= 0) {
-    spans.push({ start: runStart, end: width - 1 });
+
+  // 区間端の垂直線との交点（辺が区間端をまたぐ箇所）。
+  const n = contour.length;
+  for (let i = 0; i < n; i++) {
+    const a = contour[i];
+    const b = contour[(i + 1) % n];
+    if (!a || !b) continue;
+    for (const x of [xL, xR]) {
+      // 半開区間で straddle 判定し、共有頂点での二重計上を避ける。
+      const straddles = (a.x <= x && x < b.x) || (b.x <= x && x < a.x);
+      if (!straddles) continue;
+      const t = (x - a.x) / (b.x - a.x);
+      const y = a.y + t * (b.y - a.y);
+      if (y > deepest) deepest = y;
+    }
   }
-  return spans;
+
+  return deepest;
 }
 
 /**
- * 指定行のスパン群から、差込口幅が収まる中心のうち targetX に最も近いものを返す。
+ * 差込口（ツメ）位置を決める。
  *
- * 充填列 x は連続座標で区間 [x, x+1) を占めるとみなす。スパン [start, end] は
- * [start, end+1) を占め、その幅は (end - start + 1) 画素。差込口幅 w が収まるのは
- * 幅 ≥ w のスパンで、そのとき中心の可動範囲は [start + w/2, (end+1) - w/2]。
- * 「重心の真下（targetX）に最も近い位置」を採るため、各スパンで targetX を可動
- * 範囲へクランプし、距離が最小の中心を選ぶ。収まるスパンが無ければ null。
- */
-function bestCenterInRow(spans: Span[], slotWidthPixel: number, targetX: number): number | null {
-  let best: number | null = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (const span of spans) {
-    const spanWidth = span.end - span.start + 1;
-    // 幅が差込口幅に満たないスパンは、そもそも完全に収まらないので候補外。
-    if (spanWidth < slotWidthPixel) {
-      continue;
-    }
-    const lo = span.start + slotWidthPixel / 2;
-    const hi = span.end + 1 - slotWidthPixel / 2;
-    const center = clamp(targetX, lo, hi);
-    const distance = Math.abs(center - targetX);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = center;
-    }
-  }
-  return best;
-}
-
-/**
- * 差込口位置を探索する。
+ * 中心 X は「重心X + 差込口オフセット」。縦は、下端をカットライン最下端（足元）へ、
+ * 上端を差込口X 区間でカットラインが届いている深さ（deepest）に合わせる。ツメが足元まで
+ * 届いていない（deepest が足元より浅い）場合は縦帯がその隙間を可視化し、届いている場合は
+ * 帯が潰れないよう最小高さを確保する。実際のカットライン拡張は呼び出し側が担う。
  *
- * 画像下端の行から上へ走査し、差込口幅が完全に収まるスパンを持つ「最初（最も下）」の
- * 行を採用する。これにより SPEC の「画像最下部から探索」を満たしつつ、下端が
- * 細く尖って幅が足りない場合は必要なだけ上の行へ後退する。採用行の中では重心の
- * 真下に最も近い中心を選ぶ。
- *
- * 透明行（スパンなし）は自然にスキップされるため、フィギュア下方に紛れた孤立
- * ノイズも幅不足として読み飛ばせる。どの行でも収まらなければ配置不可として null を
- * 返し、呼び出し側が slotPlacementFailed としてエラー表示へマッピングできるようにする。
+ * スケールが不正（mmPerPixel が非有限・非正）／差込口幅が不正／カットラインが退化
+ * （3 頂点未満）な場合は配置不能として null を返し、slotPlacementFailed へマッピングさせる。
  */
 export function findSlot(
-  imageData: ImageData,
+  contour: Contour,
   centroid: Centroid,
   slotWidthMm: number,
+  slotOffsetMm: number,
   mmPerPixel: number,
 ): SlotResult | null {
-  const { data, width, height } = imageData;
-
-  // 差込口幅をピクセルへ換算。mmPerPixel が NaN/0 の異常時は探索不能として弾く。
-  const slotWidthPixel = slotWidthMm / mmPerPixel;
-  if (!Number.isFinite(slotWidthPixel) || slotWidthPixel <= 0) {
+  if (contour.length < 3) {
     return null;
   }
 
-  const targetX = centroid.pixel.x;
-  for (let y = height - 1; y >= 0; y--) {
-    const spans = filledSpansInRow(data, width, y);
-    if (spans.length === 0) {
-      continue;
-    }
-    const center = bestCenterInRow(spans, slotWidthPixel, targetX);
-    if (center !== null) {
-      return {
-        centerXPixel: center,
-        yPixel: y,
-        widthPixel: slotWidthPixel,
-        // 中心 X はピクセル座標の位置。原点 0 起点なので長さ換算と同じ乗算でよい。
-        centerXMm: pixelLengthToMm(center, mmPerPixel),
-        // 幅は与えられた実寸値をそのまま保持し、往復換算による丸め誤差を避ける。
-        widthMm: slotWidthMm,
-      };
-    }
+  const slotWidthPixel = slotWidthMm / mmPerPixel;
+  const offsetPixel = slotOffsetMm / mmPerPixel;
+  if (!Number.isFinite(slotWidthPixel) || slotWidthPixel <= 0 || !Number.isFinite(offsetPixel)) {
+    return null;
   }
 
-  return null;
+  // SPEC の定義どおり、差込口中心は重心の真下（重心X）＋左右オフセット。
+  const centerXPixel = centroid.pixel.x + offsetPixel;
+  const xL = centerXPixel - slotWidthPixel / 2;
+  const xR = centerXPixel + slotWidthPixel / 2;
+
+  const { minY, maxY } = verticalExtent(contour);
+  // 足元＝カットライン最下端。ツメの下端はここへ合わせる。
+  const footY = maxY;
+
+  // 差込口X 区間でカットラインが届いている深さ。区間がカットラインの外なら
+  // 交点も頂点も無く -∞ になるため、足元まで浮いている扱い（上端=足元-最小帯）にする。
+  const deepest = deepestBoundaryInRange(contour, xL, xR);
+
+  // 縦帯が潰れて見えなくならないよう、カットライン縦幅に応じた最小高さを確保する。
+  const minBandPx = Math.max(4, (maxY - minY) * MIN_TAB_BAND_RATIO);
+  const attachY = Number.isFinite(deepest) ? deepest : footY;
+  const yPixel = Math.min(attachY, footY - minBandPx);
+
+  return {
+    centerXPixel,
+    yPixel,
+    bottomYPixel: footY,
+    widthPixel: slotWidthPixel,
+    // 中心 X はピクセル座標の位置。原点 0 起点なので長さ換算と同じ乗算でよい。
+    centerXMm: pixelLengthToMm(centerXPixel, mmPerPixel),
+    // 幅は与えられた実寸値をそのまま保持し、往復換算による丸め誤差を避ける。
+    widthMm: slotWidthMm,
+  };
 }

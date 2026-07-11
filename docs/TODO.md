@@ -126,6 +126,60 @@
 - [x] ESLint warningゼロ／Prettier準拠を確認（`npm run lint`／`format:check`／`tsc -b`／`build` すべて通過）
 - [x] 「なぜその処理が必要か」を中心としたコメント整備
 
+## 19. テスト後の修正対応
+
+初回テストで判明した不具合・仕様変更への対応（`docs/SPEC.md` 更新済み）。
+
+### 19-1. 大画像フリーズ対策（パフォーマンス）
+
+原因は読み込みではなく、第1相解析（α マスク・重心・輪郭抽出の O(W×H) 全画素処理）を
+メインスレッドで同期実行していること。対策は「解析でメインスレッドを塞がない」ことを主眼とする。
+
+**第一の対策：解析の Web Worker 化（原寸維持）**
+
+- [x] 第1相解析（`analyzeImage`）を Web Worker 上で実行する（`analysis/analysis.worker.ts`）
+- [x] `ImageData` の `ArrayBuffer` を Transferable として Worker へ転送する（往復転送でコピー回避。戻り側は `restoreImageData` で復元）
+- [x] `useAnalysis` の `analyzing` 状態と接続し、解析中を UI 表示する（`Preview` にスピナーオーバーレイ）
+- [x] パラメータのみ変更の第2相（`runAnalysis`）は Worker を跨がず即時計算のままとする
+- [ ] 3000px超の画像を読み込んでもフリーズしないことを確認する（要ブラウザ実機確認）
+
+**補助的対策：解析解像度の上限（任意・既定OFF）**
+
+- [ ] Worker 化してもなお重い超巨大画像向けに、解析時のみ内部ダウンサンプリングを任意で用意
+- [ ] その場合 `mm_per_pixel` は縮小後解像度で算出し、表示・SVG は原寸座標を用いる
+
+### 19-2. 転倒シミュレーションのアイコン修正（UI）
+
+- [x] リロード（更新）と誤認されるアイコンを差し替える（`RotateCw`→`PersonStanding`）。適切なアイコンが無ければテキストラベルにする
+
+### 19-3. カットライン余白・平滑化パラメータ（仕様変更）
+
+- [x] `LeftPanel` に「カットライン余白(mm)」入力（0〜10mm程度、初期値3）を追加
+- [x] `LeftPanel` に「カットライン平滑化」入力を追加（0〜5 の平滑化強さスライダー）
+- [x] `analysis/contour.ts`：不透明境界を余白ぶん外側へオフセットし、平滑化を適用したカットラインを生成（`offsetContour`／`smoothContour`／`buildCutline`）
+- [x] 重心解析・台座計算・オーバーレイ・SVGエクスポートをカットラインベースへ統一（重心は `polygonCentroid` でカットライン領域の面積重心。`result.contour` がカットラインとなり overlay/SVG は自動追従）
+- [x] `model/types.ts`・`model/state.ts` にパラメータを追加
+
+### 19-4. 差込口を重心直下＋オフセット化（仕様変更）
+
+- [x] `analysis/slot.ts`：最下点探索をやめ、差込口中心を「重心X + 差込口オフセット」に配置
+- [x] `LeftPanel` に「差込口オフセット(mm)」入力（初期値0、正で右／負で左）を追加
+- [x] ツメがカットラインから離れている場合、ツメを含むようカットラインを下方向へ拡張（`analysis/contour.ts` の `attachSlotTab`。区間端の下辺クロッシングからツメ矩形へ置換）
+- [x] 拡張後の形状を外形として SVG エクスポートへ反映（`pipeline` が `result.contour` を拡張後カットラインに差し替え、overlay/SVG は自動追従。差込口帯は `bottomYPixel`＝足元まで）
+
+### 19-5. 差込口幅のプリセット廃止（仕様変更）
+
+- [x] 差込口幅入力を Select（プリセット）から数値入力のみへ変更（`LeftPanel` を `NumberField` 化。`state.ts` の `PARAMETER_PRESETS` から `slotWidthMm` を除去）
+
+### 19-6. カットライン不具合修正（2回目テスト）
+
+2回目テストで判明したカットライン関連の不具合対応（`docs/SPEC.md` 更新済み）。
+
+- [x] **自己交差の回避**：`buildCutline` で各パーツを余白オフセット後 `polygon-clipping` の union にかけ、自己交差を単純多角形へ正規化（union が破綻する退化ケースは全点凸包へフォールバック）
+- [x] **見切れ防止**：`useViewport` を内容範囲（画像∪カットライン∪オーバーレイの外接矩形）ベースへ変更し Fit/100% を拡張。自動フィットは画像 id（`fitKey`）で制御しパラメータ変更では再フィットしない。オーバーレイ SVG は `overflow-visible` で枠外も描画
+- [x] **複数パーツの包絡**：`contour.ts` に 8 連結の連結成分ラベリング＋成分ごとの外周追跡（`extractContours`）を実装。第 1 相を `Contour[]` 化し、`buildCutline` の union で近接パーツを結合、余白でも分離が残れば凸包で全パーツを包絡
+- [x] **曲線補完**：`utils/curve.ts` に閉 Catmull-Rom→3 次ベジェ変換（`closedCurvePathData`）を追加し、オーバーレイ・SVG エクスポートを曲線パス（`C` コマンド）で出力
+
 ## 将来拡張（バックログ）
 
 - [ ] 複数差込口

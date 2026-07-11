@@ -39,6 +39,18 @@ interface Size {
   readonly height: number;
 }
 
+/**
+ * Fit/100% が収めるべき内容範囲（画像ピクセル座標の外接矩形）。
+ * 画像だけでなくカットライン（余白で画像枠外へ広がり得る）を含むため、原点は必ずしも
+ * (0,0) ではなく負にもなる。stage の座標系（画像左上原点）に対する矩形として与える。
+ */
+export interface ContentBox {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 const IDENTITY: ViewportTransform = { scale: 1, tx: 0, ty: 0 };
 
 export interface UseViewportResult {
@@ -60,26 +72,32 @@ export interface UseViewportResult {
   readonly zoomOut: () => void;
 }
 
-/** コンテンツをビューポートへ収める変換（縦横比維持・中央寄せ）。 */
-function computeFit(container: Size, content: Size): ViewportTransform {
+/**
+ * 内容範囲 box をビューポートへ収める変換（縦横比維持・中央寄せ）。
+ *
+ * stage の座標系（画像左上原点）で box を中央寄せするため、box.x/box.y ぶんの原点ずれを
+ * 平行移動へ織り込む。box.x=box.y=0（画像そのもの）なら従来どおり単純な中央寄せになる。
+ * カットラインが画像枠外（負座標）へ広がっても box がそれを含むため、Fit で見切れない。
+ */
+function computeFit(container: Size, box: ContentBox): ViewportTransform {
   const scale = clamp(
-    Math.min(container.width / content.width, container.height / content.height),
+    Math.min(container.width / box.width, container.height / box.height),
     MIN_SCALE,
     MAX_SCALE,
   );
   return {
     scale,
-    tx: (container.width - content.width * scale) / 2,
-    ty: (container.height - content.height * scale) / 2,
+    tx: (container.width - box.width * scale) / 2 - box.x * scale,
+    ty: (container.height - box.height * scale) / 2 - box.y * scale,
   };
 }
 
-/** 等倍（scale=1）でコンテンツを中央寄せする変換。 */
-function computeActual(container: Size, content: Size): ViewportTransform {
+/** 等倍（scale=1）で内容範囲 box を中央寄せする変換。 */
+function computeActual(container: Size, box: ContentBox): ViewportTransform {
   return {
     scale: 1,
-    tx: (container.width - content.width) / 2,
-    ty: (container.height - content.height) / 2,
+    tx: (container.width - box.width) / 2 - box.x,
+    ty: (container.height - box.height) / 2 - box.y,
   };
 }
 
@@ -105,14 +123,13 @@ function zoomAround(
 /**
  * プレビューのズーム/パン状態を管理する。
  *
- * コンテンツ寸法（画像の自然サイズ）が変わったら自動でフィットさせる。ホイール
- * イベントはブラウザのページスクロールを抑止するため、React の passive な
- * onWheel ではなくネイティブの非 passive リスナとして購読する。
+ * 自動フィットは fitKey（画像の同一性）が変わったとき（＝新規画像の読み込み）だけ行う。
+ * 内容範囲 box はパラメータ変更（カットライン余白など）でも変わるが、その都度フィットし直すと
+ * ユーザーのズーム/パンを勝手に破棄してしまうため、box の変化では再フィットせず「手動 Fit の
+ * 対象範囲」を更新するだけに留める。ホイールイベントはページスクロール抑止のため非 passive の
+ * ネイティブリスナで購読する。
  */
-export function useViewport(
-  contentWidth: number | null,
-  contentHeight: number | null,
-): UseViewportResult {
+export function useViewport(box: ContentBox | null, fitKey: unknown): UseViewportResult {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [transform, setTransform] = useState<ViewportTransform>(IDENTITY);
   const [isPanning, setIsPanning] = useState(false);
@@ -125,11 +142,13 @@ export function useViewport(
     transformRef.current = transform;
   }, [transform]);
   const containerSizeRef = useRef<Size | null>(null);
-  const contentRef = useRef<Size | null>(null);
+  const contentRef = useRef<ContentBox | null>(null);
 
-  // コンテンツ寸法ごとに一度だけ自動フィットしたかを記録する。ウィンドウ
-  // リサイズのたびに再フィットしてユーザーのズームを破棄しないための番人。
+  // fitKey ごとに一度だけ自動フィットしたかを記録する。ウィンドウリサイズや box の
+  // 変化（パラメータ調整）で再フィットしてユーザーのズームを破棄しないための番人。
   const fittedRef = useRef(false);
+  // 直近に自動フィットした fitKey。これが変わったときだけ新規画像として再フィットする。
+  const fitKeyRef = useRef<unknown>(undefined);
 
   const applyFit = useCallback(() => {
     const container = containerSizeRef.current;
@@ -162,19 +181,20 @@ export function useViewport(
   const zoomIn = useCallback(() => zoomAtCenter(BUTTON_ZOOM_FACTOR), [zoomAtCenter]);
   const zoomOut = useCallback(() => zoomAtCenter(1 / BUTTON_ZOOM_FACTOR), [zoomAtCenter]);
 
-  // コンテンツ寸法が変わったら、最新寸法を ref へ反映し、次の計測時に自動フィット
-  // させるため印をリセットする。すでにサイズが分かっていれば即フィットする。
+  // box（内容範囲）が変わったら最新値を ref へ反映する。手動 Fit / 100% はこの ref を使う。
+  // 自動フィットは fitKey が変わったとき（＝新規画像）だけ。パラメータ変更に伴う box の
+  // 変化ではユーザーのズーム/パンを保つため再フィットしない。
   useEffect(() => {
-    contentRef.current =
-      contentWidth != null && contentHeight != null
-        ? { width: contentWidth, height: contentHeight }
-        : null;
-    fittedRef.current = false;
-    if (containerSizeRef.current && contentRef.current) {
-      applyFit();
-      fittedRef.current = true;
+    contentRef.current = box;
+    if (fitKeyRef.current !== fitKey) {
+      fitKeyRef.current = fitKey;
+      fittedRef.current = false;
+      if (containerSizeRef.current && contentRef.current) {
+        applyFit();
+        fittedRef.current = true;
+      }
     }
-  }, [contentWidth, contentHeight, applyFit]);
+  }, [box, fitKey, applyFit]);
 
   // ビューポートのサイズを追跡し、初回計測時に（まだなら）自動フィットする。
   useEffect(() => {

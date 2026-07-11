@@ -106,7 +106,12 @@ function App() {
               {state.error.message}
             </div>
           )}
-          <Preview image={state.image} result={state.result} onImageFile={handleImageFile} />
+          <Preview
+            image={state.image}
+            result={state.result}
+            status={state.status}
+            onImageFile={handleImageFile}
+          />
           <ResultPanel result={state.result} safetyFactor={state.parameters.safetyFactor} />
         </section>
       </main>
