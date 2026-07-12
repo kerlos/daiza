@@ -134,8 +134,17 @@ function zoomAround(
  * ユーザーのズーム/パンを勝手に破棄してしまうため、box の変化では再フィットせず「手動 Fit の
  * 対象範囲」を更新するだけに留める。ホイールイベントはページスクロール抑止のため非 passive の
  * ネイティブリスナで購読する。
+ *
+ * enabled = false の間はホイールズームを購読しない。3D プレビューモードでは同じ表示領域に
+ * 3D キャンバスが載り、そのオービット操作（ホイールズーム）とイベントを奪い合ってしまう
+ * ためである。変換の state はそのまま保持されるので、2D へ戻せばズーム・パンは元のまま
+ * 復帰する（SPEC「2D へ戻したとき、2D 側の表示状態は維持されていること」）。
  */
-export function useViewport(box: ContentBox | null, fitKey: unknown): UseViewportResult {
+export function useViewport(
+  box: ContentBox | null,
+  fitKey: unknown,
+  enabled = true,
+): UseViewportResult {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [transform, setTransform] = useState<ViewportTransform>(IDENTITY);
   const [isPanning, setIsPanning] = useState(false);
@@ -232,7 +241,7 @@ export function useViewport(box: ContentBox | null, fitKey: unknown): UseViewpor
   // 止める必要があるため非 passive のネイティブリスナで購読する。
   useEffect(() => {
     const element = containerRef.current;
-    if (!element) {
+    if (!element || !enabled) {
       return;
     }
     const handleWheel = (event: WheelEvent) => {
@@ -248,7 +257,7 @@ export function useViewport(box: ContentBox | null, fitKey: unknown): UseViewpor
     };
     element.addEventListener('wheel', handleWheel, { passive: false });
     return () => element.removeEventListener('wheel', handleWheel);
-  }, []);
+  }, [enabled]);
 
   // ドラッグパン：pointerdown 時点の変換と開始座標を控え、移動量を加算する。
   const panRef = useRef<{

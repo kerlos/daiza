@@ -1,0 +1,370 @@
+// 3D プレビューのシーングラフ（React Three Fiber）。
+//
+// 実寸(mm)のシーン座標系（原点 = 接地面上の台座中心・Y 上正・Z 前正。render/scene3d 参照）で
+// 以下を組み立てる：
+//
+//   アクリル板 …… 統合カットラインを板厚ぶん押し出したソリッド（透明アクリル素材）
+//   印刷レイヤ …… 板の裏面へ「絵柄 → 白版」の順に重ねた 2 枚の平面（実物の UV 印刷の再現）
+//   台座 …… 貫通スリットを開けた同じ厚みのアクリル板
+//   環境 …… 床（テクスチャ・実寸グリッド。components/preview3d/Floor）+ 接地影
+//            + ソフトな環境光（スタジオ風）
+//
+// 傾け（転倒シミュレーション）は、台座の支持端エッジを支点にした 2 段の group 回転で表す。
+// 分解アニメーションは板だけを +Y へ動かす group で表す。どちらも解析結果には触れない
+// 表示専用の変形であり、ジオメトリは作り直さない。
+
+import { useEffect, useMemo, useRef, type ComponentRef, type ReactNode } from 'react';
+
+import { ContactShadows, Environment, Lightformer, Line, OrbitControls } from '@react-three/drei';
+import { useFrame, useThree } from '@react-three/fiber';
+import { DoubleSide, FrontSide, type Group } from 'three';
+
+import { Floor } from '@/components/preview3d/Floor';
+import {
+  buildBaseGeometry,
+  buildPlateGeometry,
+  buildTexture,
+} from '@/components/preview3d/geometry3d';
+import type { Scene3dCamera, Scene3dGeometry } from '@/render/scene3d';
+import type { ArtworkTextures } from '@/render/texture3d';
+import { degToRad } from '@/utils/geometry';
+
+/** 背景の色。商品写真のスタジオを模した無彩色（SPEC「背景は単色」）。 */
+const BACKGROUND_COLOR = '#e8ecf1';
+
+/**
+ * 印刷レイヤの間隔(mm)。実物のインクは板の裏面に載る（＝アクリルの外側）ため、板の裏面より
+ * わずかに奥へ置く。深度バッファの分解能より十分大きく、かつ実寸としては無視できる厚み。
+ */
+const INK_GAP_MM = 0.15;
+
+/** 分解／組立アニメーションの所要時間(秒)。 */
+const EXPLODE_DURATION_SEC = 0.6;
+
+/** 1 フレームで進める時間の上限(秒)。タブ復帰直後の巨大な delta で一気に飛ぶのを防ぐ。 */
+const MAX_FRAME_DELTA_SEC = 0.1;
+
+/** 支点エッジのハイライト色。転倒角の内側（安全）／超過（警告）。 */
+const PIVOT_SAFE_COLOR = '#f97316';
+const PIVOT_FALLING_COLOR = '#ef4444';
+
+/** 床より下へ回り込ませないための仰角の上限（真横よりわずかに上まで）。 */
+const MAX_POLAR_ANGLE = Math.PI / 2 - 0.02;
+
+export interface FigureSceneProps {
+  geometry: Scene3dGeometry;
+  textures: ArtworkTextures;
+  /** 印刷レイヤを切り抜く alphaTest のしきい値（render/texture3d の inkAlphaTest）。 */
+  inkAlphaTest: number;
+  /** 左右の傾き(度)。負 = 左へ／正 = 右へ。 */
+  tiltLeftRightDeg: number;
+  /** 前後の傾き(度)。負 = 後ろへ／正 = 前へ。 */
+  tiltFrontBackDeg: number;
+  /** 分解（板を持ち上げて台座から抜く）状態か。 */
+  exploded: boolean;
+  /** 台座を強めの半透明にするか（スリット内のツメの収まりを透かして見る）。 */
+  translucentBase: boolean;
+  /** 床へ貼るテクスチャ画像。null なら無地の床。 */
+  floorImage: ImageBitmap | null;
+  /** 床に実寸グリッドを表示するか。 */
+  floorGrid: boolean;
+  /** インクリメントすると初期構図へ戻る（視点リセット）。 */
+  resetToken: number;
+}
+
+export function FigureScene({
+  geometry,
+  textures,
+  inkAlphaTest,
+  tiltLeftRightDeg,
+  tiltFrontBackDeg,
+  exploded,
+  translucentBase,
+  floorImage,
+  floorGrid,
+  resetToken,
+}: FigureSceneProps) {
+  const { plate, base, artwork, tipping, explodeLiftMm, camera } = geometry;
+  const controlsRef = useRef<ComponentRef<typeof OrbitControls> | null>(null);
+
+  // ジオメトリ・テクスチャは解析結果／画像が変わったときだけ作り直す（SPEC の性能要件）。
+  // R3F は props で渡したオブジェクトを破棄しないため、差し替え時の解放は自分で行う。
+  const plateGeometry = useMemo(() => buildPlateGeometry(plate), [plate]);
+  const baseGeometry = useMemo(() => buildBaseGeometry(base), [base]);
+  const artworkTexture = useMemo(() => buildTexture(textures.artwork), [textures.artwork]);
+  const whiteTexture = useMemo(() => buildTexture(textures.white), [textures.white]);
+  useEffect(() => () => plateGeometry.dispose(), [plateGeometry]);
+  useEffect(() => () => baseGeometry.dispose(), [baseGeometry]);
+  useEffect(() => () => artworkTexture.dispose(), [artworkTexture]);
+  useEffect(() => () => whiteTexture.dispose(), [whiteTexture]);
+
+  // 板の裏面（奥）の Z。印刷レイヤはここからさらに奥へ 2 枚重ねる。
+  const plateBackZ = plate.centerZMm - plate.thicknessMm / 2;
+
+  // 支点は「倒れる側」の底辺エッジ。左右は台座の左右端、前後は前後端に取る。
+  const pivotX = (tiltLeftRightDeg >= 0 ? 1 : -1) * (base.widthMm / 2);
+  const pivotZ = (tiltFrontBackDeg >= 0 ? 1 : -1) * (base.depthMm / 2);
+
+  // その向きの転倒角を超えたか（＝この角度では倒れる）。支点ハイライトを警告色にする。
+  const lrLimitDeg = tiltLeftRightDeg >= 0 ? tipping.rightDeg : tipping.leftDeg;
+  const fbLimitDeg = tiltFrontBackDeg >= 0 ? tipping.frontDeg : tipping.backDeg;
+  const lrFalling = Math.abs(tiltLeftRightDeg) > lrLimitDeg;
+  const fbFalling = Math.abs(tiltFrontBackDeg) > fbLimitDeg;
+
+  const shadowScaleMm = Math.max(base.widthMm, base.depthMm) * 2.6;
+
+  return (
+    <>
+      <color attach="background" args={[BACKGROUND_COLOR]} />
+
+      {/* ソフトな環境光。外部 HDRI は取得しない（完全クライアントサイドの制約）ため、
+          面光源（Lightformer）から環境マップをその場で焼き、透明素材の映り込みに使う。 */}
+      <ambientLight intensity={1.1} />
+      <directionalLight position={[300, 500, 400]} intensity={1.5} />
+      <Environment resolution={256}>
+        <Lightformer intensity={2.4} position={[0, 300, 300]} scale={[400, 200, 1]} />
+        <Lightformer intensity={1.2} position={[-350, 150, 150]} scale={[200, 300, 1]} />
+        <Lightformer intensity={1.2} position={[350, 150, 150]} scale={[200, 300, 1]} />
+        <Lightformer intensity={0.6} position={[0, -200, -300]} scale={[400, 200, 1]} />
+      </Environment>
+
+      {/* 床（テクスチャ + 実寸グリッド）と接地影。影は被写体を真下から撮った深度で作るため、
+          傾けても追従する。 */}
+      <Floor image={floorImage} grid={floorGrid} />
+      <ContactShadows
+        position={[0, 0, 0]}
+        scale={shadowScaleMm}
+        far={Math.max(plate.topYMm, 1)}
+        resolution={512}
+        blur={2.5}
+        opacity={0.45}
+        color="#1e293b"
+      />
+
+      {/* 傾け：外側 = 左右（Z 軸まわり）、内側 = 前後（X 軸まわり）。いずれも支点エッジへ
+          原点を移してから回し、元へ戻す（＝エッジを軸にした回転）。右へ倒す（正）とき、
+          上部が +X へ動くのは Z 軸まわりの**負**の回転。 */}
+      <group position={[pivotX, 0, 0]} rotation={[0, 0, -degToRad(tiltLeftRightDeg)]}>
+        <group position={[-pivotX, 0, 0]}>
+          <group position={[0, 0, pivotZ]} rotation={[degToRad(tiltFrontBackDeg), 0, 0]}>
+            <group position={[0, 0, -pivotZ]}>
+              {/* 台座。半透明トグル時のみ transmission をやめた素直なアルファ合成にして、
+                  スリット内のツメが背後に透けて見えるようにする。 */}
+              <mesh geometry={baseGeometry} rotation={[-Math.PI / 2, 0, 0]}>
+                {translucentBase ? (
+                  <meshPhysicalMaterial
+                    color="#cfe3f5"
+                    transparent
+                    opacity={0.28}
+                    depthWrite={false}
+                    roughness={0.12}
+                    metalness={0}
+                    ior={1.49}
+                    envMapIntensity={0.8}
+                  />
+                ) : (
+                  <AcrylicMaterial thicknessMm={base.thicknessMm} />
+                )}
+              </mesh>
+
+              {/* アクリル板 + 印刷レイヤ。分解時はこの group ごと上へ抜ける。 */}
+              <ExplodeGroup liftMm={explodeLiftMm} exploded={exploded}>
+                <mesh geometry={plateGeometry} position={[0, 0, plateBackZ]}>
+                  <AcrylicMaterial thicknessMm={plate.thicknessMm} />
+                </mesh>
+
+                {/* 絵柄（白版と合成済み）：板の裏面のすぐ奥。前から見るとアクリル越しに
+                    見え、後ろからは白版に隠れる（＝表面のみ描画）。
+                    半透明ではなく alphaTest で切り抜くのは、アクリルの透過（transmission）が
+                    背景バッファへ不透明オブジェクトしか描かないため（render/texture3d 参照）。 */}
+                <mesh position={[artwork.centerX, artwork.centerY, plateBackZ - INK_GAP_MM]}>
+                  <planeGeometry args={[artwork.width, artwork.height]} />
+                  <meshStandardMaterial
+                    map={artworkTexture}
+                    alphaTest={inkAlphaTest}
+                    alphaToCoverage
+                    side={FrontSide}
+                    roughness={0.9}
+                    metalness={0}
+                  />
+                </mesh>
+
+                {/* 白版：絵柄のさらに奥。不透明領域だけを白で覆い、後ろから見ると
+                    これが直接見える（絵柄は表面のみなので裏からは映らない）。 */}
+                <mesh position={[artwork.centerX, artwork.centerY, plateBackZ - INK_GAP_MM * 2]}>
+                  <planeGeometry args={[artwork.width, artwork.height]} />
+                  <meshStandardMaterial
+                    map={whiteTexture}
+                    alphaTest={inkAlphaTest}
+                    alphaToCoverage
+                    side={DoubleSide}
+                    color="#ffffff"
+                    roughness={0.9}
+                    metalness={0}
+                  />
+                </mesh>
+              </ExplodeGroup>
+
+              {/* 支点エッジのハイライト。ガイドは常時出さず、傾けているときだけ見せる
+                  （完成プレビューと同じ「素の見た目を邪魔しない」思想。SPEC）。 */}
+              {tiltLeftRightDeg !== 0 && (
+                <Line
+                  points={[
+                    [pivotX, 0, -base.depthMm / 2],
+                    [pivotX, 0, base.depthMm / 2],
+                  ]}
+                  color={lrFalling ? PIVOT_FALLING_COLOR : PIVOT_SAFE_COLOR}
+                  lineWidth={3}
+                />
+              )}
+              {tiltFrontBackDeg !== 0 && (
+                <Line
+                  points={[
+                    [-base.widthMm / 2, 0, pivotZ],
+                    [base.widthMm / 2, 0, pivotZ],
+                  ]}
+                  color={fbFalling ? PIVOT_FALLING_COLOR : PIVOT_SAFE_COLOR}
+                  lineWidth={3}
+                />
+              )}
+            </group>
+          </group>
+        </group>
+      </group>
+
+      <OrbitControls
+        ref={controlsRef}
+        makeDefault
+        enableDamping
+        dampingFactor={0.08}
+        maxPolarAngle={MAX_POLAR_ANGLE}
+        minDistance={Math.max(2, plate.topYMm * 0.05)}
+        maxDistance={Math.max(500, plate.topYMm * 8)}
+      />
+      <CameraRig frame={camera} resetToken={resetToken} controlsRef={controlsRef} />
+    </>
+  );
+}
+
+/**
+ * 透明アクリルの素材（板・台座で共有）。
+ *
+ * transmission（透過）で背後を屈折させ、環境マップの映り込みと弱い減衰色で「厚みのある
+ * 透明樹脂」に見せる。thickness は減衰計算に使う実寸の厚み(mm)なので、板厚をそのまま渡す。
+ */
+function AcrylicMaterial({ thicknessMm }: { thicknessMm: number }) {
+  return (
+    <meshPhysicalMaterial
+      color="#ffffff"
+      transmission={1}
+      thickness={thicknessMm}
+      ior={1.49}
+      roughness={0.08}
+      metalness={0}
+      clearcoat={0.3}
+      clearcoatRoughness={0.15}
+      attenuationColor="#eaf4f6"
+      attenuationDistance={150}
+      envMapIntensity={1.1}
+    />
+  );
+}
+
+/** 3 次のイーズイン・アウト。分解／組立の加減速に使う。 */
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/**
+ * 分解／組立アニメーション。板を +Y へ持ち上げ（分解）／降ろす（組立）。
+ *
+ * オンデマンド描画（frameloop="demand"）では、状態が変わっても自分でフレームを要求しない
+ * 限り useFrame は呼ばれない。そこで目標が変わったら invalidate() で 1 フレーム起こし、
+ * 以降は「目標へ届くまで自分で次フレームを要求し続ける」ことで自走させる。到達後は要求を
+ * やめるので、静止中は GPU を使わない。
+ */
+function ExplodeGroup({
+  liftMm,
+  exploded,
+  children,
+}: {
+  liftMm: number;
+  exploded: boolean;
+  children: ReactNode;
+}) {
+  const groupRef = useRef<Group>(null);
+  const progressRef = useRef(exploded ? 1 : 0);
+  const invalidate = useThree((state) => state.invalidate);
+
+  // 目標の変化（ボタン）と持ち上げ量の変化（パラメータ変更）に反応する。後者では
+  // アニメーションを走らせず、現在の進捗のまま新しい高さへ即時追従させる。
+  useEffect(() => {
+    const group = groupRef.current;
+    if (group) {
+      group.position.y = liftMm * easeInOutCubic(progressRef.current);
+    }
+    invalidate();
+  }, [exploded, liftMm, invalidate]);
+
+  useFrame((_, delta) => {
+    const target = exploded ? 1 : 0;
+    const current = progressRef.current;
+    if (current === target) {
+      return;
+    }
+    const step = Math.min(delta, MAX_FRAME_DELTA_SEC) / EXPLODE_DURATION_SEC;
+    const next =
+      target > current ? Math.min(target, current + step) : Math.max(target, current - step);
+    progressRef.current = next;
+
+    const group = groupRef.current;
+    if (group) {
+      group.position.y = liftMm * easeInOutCubic(next);
+    }
+    if (next !== target) {
+      invalidate();
+    }
+  });
+
+  return <group ref={groupRef}>{children}</group>;
+}
+
+/**
+ * 初期構図の適用と視点リセット。
+ *
+ * 構図（camera）はパラメータ変更のたびに作り直されるが、そのつどカメラを動かすと
+ * ユーザーのオービット操作を勝手に破棄してしまう。そこで最新の構図は ref で参照するに留め、
+ * **初回マウントと resetToken の変化**でのみカメラへ適用する。
+ */
+function CameraRig({
+  frame,
+  resetToken,
+  controlsRef,
+}: {
+  frame: Scene3dCamera;
+  resetToken: number;
+  controlsRef: React.RefObject<ComponentRef<typeof OrbitControls> | null>;
+}) {
+  const camera = useThree((state) => state.camera);
+  const invalidate = useThree((state) => state.invalidate);
+  const frameRef = useRef(frame);
+
+  useEffect(() => {
+    frameRef.current = frame;
+  }, [frame]);
+
+  useEffect(() => {
+    const target = frameRef.current;
+    camera.position.set(...target.position);
+    const controls = controlsRef.current;
+    if (controls) {
+      controls.target.set(...target.target);
+      controls.update();
+    } else {
+      camera.lookAt(...target.target);
+    }
+    invalidate();
+  }, [resetToken, camera, controlsRef, invalidate]);
+
+  return null;
+}

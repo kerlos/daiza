@@ -1,11 +1,12 @@
 // 画像プレビュー領域。
 //
-// 役割は 7 つ：(1) 読み込み済み画像を Canvas に等倍で描く、(2) 解析結果があれば
+// 役割は 8 つ：(1) 読み込み済み画像を Canvas に等倍で描く、(2) 解析結果があれば
 // SVG オーバーレイ（外形・重心・差込部・台座・支持範囲・鉛直線）を画像へ重ねる、
 // (3) 転倒シミュレーション（左右の限界姿勢）をトグルで重ね描く、(4) PNG のドラッグ
 // ＆ドロップを受け付ける、(5) ホイールズーム・ドラッグパン・Fit・100% の表示操作を
 // 提供する（TODO 9）、(6) 上端・左端に実寸(mm)ルーラーを重ねる（TODO 20-1）、
-// (7) 仕上がりを確認する完成プレビューモードへ切り替える（TODO 22-2）。
+// (7) 仕上がりを確認する完成プレビューモードへ切り替える（TODO 22-2）、
+// (8) 立体で確認する 3D プレビューモードへ切り替える（TODO 26）。
 //
 // 図形の幾何は render/overlay.ts・render/simulation.ts（いずれも純粋ロジック）が
 // 画像ピクセル座標で算出し、本コンポーネントは role ごとの見た目（色・線種）を与えて
@@ -13,10 +14,14 @@
 // Canvas と SVG を内包する stage 要素へまとめて適用する。これにより画像とオーバーレイ
 // は常に一致して拡縮・移動する。オーバーレイの線幅・マーカー半径だけは scale で割って、
 // ズームしても画面上で一定サイズに保つ。
+//
+// 3D プレビューは three.js 一式（数百 KB）を要するため、React.lazy で分離チャンクに置き、
+// 3D モードへ初めて切り替えたときにだけ読み込む（SPEC「技術・読み込み」）。3 つのモードは
+// いずれも**表示のみの切替**で、解析結果・パラメータには一切触れない。
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 
-import { Eye, ImageOff, Loader2, Maximize2, Minus, PersonStanding, Plus } from 'lucide-react';
+import { Box, Eye, ImageOff, Loader2, Maximize2, Minus, PersonStanding, Plus } from 'lucide-react';
 
 import { RULER_SIZE_PX, Ruler } from '@/components/Ruler';
 import { Button } from '@/components/ui/button';
@@ -28,6 +33,9 @@ import type { AnalysisResult, FigureImage, Point } from '@/model/types';
 import { cn } from '@/lib/utils';
 import { closedCurvePathData } from '@/utils/curve';
 import { radToDeg } from '@/utils/geometry';
+
+/** 3D プレビュー（three.js / R3F を含むチャンク）。3D へ切り替えるまで読み込まない。 */
+const Preview3d = lazy(() => import('@/components/preview3d/Preview3d'));
 
 /**
  * 外形（カットライン）の塗り・線の色。完成プレビューモードでは台座もこの色で描き、
@@ -46,13 +54,25 @@ export interface PreviewProps {
    * （フィギュア高さと画像高さから）決まる値なので、result とは別に受け取る。
    */
   mmPerPixel?: number | null;
+  /**
+   * 不透明領域のしきい値（0〜1）。3D プレビューが白版（絵柄のシルエット）を作る際に、
+   * 解析と同一の判定でα を 2 値化するために要る。
+   */
+  alphaThreshold?: number;
   /** 解析の進行状態。'analyzing' の間は解析中インジケータを重ねる。 */
   status?: AnalysisStatus;
   /** ドロップされた PNG ファイルを通知する。未指定ならドロップは受け付けない。 */
   onImageFile?: (file: File) => void;
 }
 
-export function Preview({ image, result, mmPerPixel, status, onImageFile }: PreviewProps) {
+export function Preview({
+  image,
+  result,
+  mmPerPixel,
+  alphaThreshold = 0,
+  status,
+  onImageFile,
+}: PreviewProps) {
   // ドラッグ中はドロップ可能であることを視覚的に示すためのフラグ。
   const [isDragOver, setIsDragOver] = useState(false);
   // 転倒シミュレーション（左右の限界姿勢）の表示切替。常時重ねると主オーバーレイが
@@ -61,7 +81,13 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
   // 完成プレビューモード（仕上がり確認）の表示切替。表示だけの切替であり、解析・パラメータ・
   // SVG エクスポートには一切影響しない（＝この state は描画分岐にのみ使う）。
   const [finishView, setFinishView] = useState(false);
+  // 3D プレビューモードの表示切替。こちらも表示のみの切替。
+  const [view3d, setView3d] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // 3D は解析結果が要る（立体を組み立てられない）。解析エラーで結果が消えた場合は
+  // 自動的に 2D へ戻し、エラー表示が読める状態にする（SPEC「解析結果があるときのみ有効」）。
+  const show3d = view3d && result != null && image != null;
 
   // 読み込みハンドラが無ければ D&D は無効。ハンドラの有無で振る舞いを分ける。
   const dropEnabled = Boolean(onImageFile);
@@ -120,7 +146,9 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
   }, [overlay, image]);
 
   // 表示操作（ズーム/パン/Fit/100%）。自動フィットは画像の同一性（id）で制御し、
-  // パラメータ変更（box の変化）ではユーザーのズーム/パンを保つ。
+  // パラメータ変更（box の変化）ではユーザーのズーム/パンを保つ。3D 中は 2D の
+  // ホイールズームを止め、3D のオービット操作とイベントを奪い合わないようにする
+  // （state は保持されるので 2D へ戻ればズーム・パンはそのまま復帰する）。
   const {
     containerRef,
     containerSize,
@@ -133,7 +161,7 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
     actualSize,
     zoomIn,
     zoomOut,
-  } = useViewport(contentBox, image?.id ?? null);
+  } = useViewport(contentBox, image?.id ?? null, !show3d);
 
   // 画像が変わったときだけ Canvas へ等倍で描き直す。Canvas 要素は自然解像度で持ち、
   // 拡縮は stage の transform に委ねる。描画元はデコード済み ImageBitmap
@@ -177,13 +205,13 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
         'bg-muted/30 relative flex flex-1 touch-none items-center justify-center overflow-hidden rounded-lg border',
         // ドラッグ中は境界を強調してドロップ対象であることを明示する。
         isDragOver && 'border-primary bg-primary/10',
-        // パン操作のためのカーソル表現（画像がある時のみ）。
-        image && (isPanning ? 'cursor-grabbing' : 'cursor-grab'),
+        // パン操作のためのカーソル表現（2D で画像がある時のみ。3D はキャンバス側が持つ）。
+        image && !show3d && (isPanning ? 'cursor-grabbing' : 'cursor-grab'),
       )}
-      onPointerDown={image ? onPointerDown : undefined}
-      onPointerMove={image ? onPointerMove : undefined}
-      onPointerUp={image ? onPointerUp : undefined}
-      onPointerCancel={image ? onPointerUp : undefined}
+      onPointerDown={image && !show3d ? onPointerDown : undefined}
+      onPointerMove={image && !show3d ? onPointerMove : undefined}
+      onPointerUp={image && !show3d ? onPointerUp : undefined}
+      onPointerCancel={image && !show3d ? onPointerUp : undefined}
       onDragOver={
         dropEnabled
           ? (event) => {
@@ -210,9 +238,31 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
     >
       {image ? (
         <>
+          {/* 3D プレビュー：チャンクの読み込み中はインジケータを出す（初回切替時のみ）。
+              2D の stage は描かないが、useViewport の変換 state は保持される。 */}
+          {show3d && result && (
+            <Suspense
+              fallback={
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2"
+                >
+                  <Loader2 className="size-8 animate-spin" />
+                  <p className="text-sm font-medium">3Dビューを読み込み中…</p>
+                </div>
+              }
+            >
+              <Preview3d result={result} image={image} alphaThreshold={alphaThreshold} />
+            </Suspense>
+          )}
+
           {/* stage：画像の自然サイズを持つ箱。左上原点で transform を適用し、内包する
-              Canvas と SVG をまとめて拡縮・移動する。両者は同一の箱を満たすため常に重なる。 */}
+              Canvas と SVG をまとめて拡縮・移動する。両者は同一の箱を満たすため常に重なる。
+              3D 中はアンマウントせず hidden で隠す：Canvas への描画は画像が変わったときの
+              effect でしか行わないため、アンマウントすると 2D へ戻ったとき白紙になる。 */}
           <div
+            hidden={show3d}
             className="absolute top-0 left-0 origin-top-left"
             style={{
               width: image.width,
@@ -353,8 +403,9 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
 
           {/* ルーラー（上端・左端、実寸 mm）。stage ではなくビューポートに固定表示し、
               transform から目盛り位置を算出してズーム・パンへ追従させる。pointer-events は
-              持たないため、下のプレビューのドラッグパン・ホイールズームを妨げない。 */}
-          {containerSize && mmPerPixel != null && (
+              持たないため、下のプレビューのドラッグパン・ホイールズームを妨げない。
+              2D 前提の UI なので 3D モードでは出さない（SPEC）。 */}
+          {!show3d && containerSize && mmPerPixel != null && (
             <Ruler
               width={containerSize.width}
               height={containerSize.height}
@@ -370,59 +421,96 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
             className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md border bg-background/80 p-1 shadow-sm backdrop-blur"
             onPointerDown={(event) => event.stopPropagation()}
           >
+            {/* 3D プレビューモード切替。立体は解析結果が無いと組み立てられないので、
+                結果がある時だけ有効。3D 側の操作（オービット・傾け・分解）はチャンク内の
+                Preview3d が自前のコントロールで提供する。 */}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setView3d((v) => !v)}
+              disabled={!result}
+              className={cn(show3d && 'text-primary bg-primary/10')}
+              title="3Dプレビュー"
+              aria-label="3Dプレビュー"
+              aria-pressed={show3d}
+            >
+              <Box />
+            </Button>
             {/* 完成プレビューモード切替。オーバーレイの見た目だけを切り替える（解析は再実行
-                されない）。オーバーレイが無い＝見せる仕上がりが無い間は無効化。 */}
+                されない）。オーバーレイが無い＝見せる仕上がりが無い間は無効化。3D 中は
+                2D オーバーレイ自体を出さないため無効化する。 */}
             <Button
               variant="ghost"
               size="icon-sm"
               onClick={() => setFinishView((v) => !v)}
-              disabled={!overlay}
-              className={cn(finishView && 'text-primary bg-primary/10')}
+              disabled={!overlay || show3d}
+              className={cn(finishView && !show3d && 'text-primary bg-primary/10')}
               title="完成プレビュー"
               aria-label="完成プレビュー"
-              aria-pressed={finishView}
+              aria-pressed={finishView && !show3d}
             >
               <Eye />
             </Button>
             {/* 転倒シミュレーション表示切替。解析結果が無い間は対象が無いので無効化。
-                完成プレビューモードではガイドを一切出さないためトグル自体を無効化する。 */}
+                完成プレビューモード・3D モードではガイドを一切出さないためトグル自体を
+                無効化する（3D の転倒は Preview3d の傾けスライダーで行う）。 */}
             <Button
               variant="ghost"
               size="icon-sm"
               onClick={() => setShowSimulation((v) => !v)}
-              disabled={!simulation || finishView}
-              className={cn(showSimulation && !finishView && 'text-primary bg-primary/10')}
+              disabled={!simulation || finishView || show3d}
+              className={cn(
+                showSimulation && !finishView && !show3d && 'text-primary bg-primary/10',
+              )}
               title="転倒シミュレーション"
               aria-label="転倒シミュレーション"
-              aria-pressed={showSimulation && !finishView}
+              aria-pressed={showSimulation && !finishView && !show3d}
             >
               <PersonStanding />
             </Button>
-            <Button variant="ghost" size="icon-sm" onClick={zoomOut} title="縮小" aria-label="縮小">
-              <Minus />
-            </Button>
-            {/* 現在の拡大率。クリックで 100% 表示に合わせる。 */}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="min-w-14 tabular-nums"
-              onClick={actualSize}
-              title="100%表示"
-            >
-              {Math.round(s * 100)}%
-            </Button>
-            <Button variant="ghost" size="icon-sm" onClick={zoomIn} title="拡大" aria-label="拡大">
-              <Plus />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={fit}
-              title="全体表示（Fit）"
-              aria-label="全体表示"
-            >
-              <Maximize2 />
-            </Button>
+
+            {/* ズーム・Fit・100% は 2D の表示操作。3D ではカメラ操作が担うため出さない。 */}
+            {!show3d && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={zoomOut}
+                  title="縮小"
+                  aria-label="縮小"
+                >
+                  <Minus />
+                </Button>
+                {/* 現在の拡大率。クリックで 100% 表示に合わせる。 */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="min-w-14 tabular-nums"
+                  onClick={actualSize}
+                  title="100%表示"
+                >
+                  {Math.round(s * 100)}%
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={zoomIn}
+                  title="拡大"
+                  aria-label="拡大"
+                >
+                  <Plus />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={fit}
+                  title="全体表示（Fit）"
+                  aria-label="全体表示"
+                >
+                  <Maximize2 />
+                </Button>
+              </>
+            )}
           </div>
 
           {/* 解析中インジケータ。解析は Web Worker で走るため UI は固まらないが、

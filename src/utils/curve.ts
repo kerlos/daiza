@@ -20,6 +20,7 @@
 // format コールバックで外から与える。
 
 import type { Point } from '@/model/types';
+import { clamp } from '@/utils/geometry';
 
 /** 3 次ベジェの 1 区間。始点は直前区間の終点（先頭区間は曲線の start）。 */
 export interface CubicBezierSegment {
@@ -149,9 +150,7 @@ export function closedRoundedCorners(
     return null;
   }
 
-  const sharp = options.sharpCorners?.length
-    ? sharpIndicesOf(points, options.sharpCorners)
-    : null;
+  const sharp = options.sharpCorners?.length ? sharpIndicesOf(points, options.sharpCorners) : null;
 
   // 巡回アクセサ。?? は範囲内アクセスでは発火しないが、noUncheckedIndexedAccess を満たす。
   const at = (i: number): Point => points[((i % n) + n) % n] ?? { x: 0, y: 0 };
@@ -213,6 +212,89 @@ export function closedRoundedCorners(
   }
 
   return { start: enter[0] ?? at(0), segments };
+}
+
+/** 1 区間あたりの分割数の上限。丸め区間は短いので、これ以上刻んでも見た目は変わらない。 */
+const MAX_FLATTEN_STEPS = 16;
+
+/** 3 次ベジェ上の点（t ∈ [0, 1]）。P0 = start, P1 = c1, P2 = c2, P3 = end。 */
+function cubicAt(start: Point, seg: CubicBezierSegment, t: number): Point {
+  const u = 1 - t;
+  const a = u * u * u;
+  const b = 3 * u * u * t;
+  const c = 3 * u * t * t;
+  const d = t * t * t;
+  return {
+    x: a * start.x + b * seg.c1.x + c * seg.c2.x + d * seg.end.x,
+    y: a * start.y + b * seg.c1.y + c * seg.c2.y + d * seg.end.y,
+  };
+}
+
+/** 点 p の、弦 a→b からの垂直距離。a≡b の退化ケースは a からの距離で代用する。 */
+function chordDistance(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < MIN_EDGE_LEN) {
+    return Math.hypot(p.x - a.x, p.y - a.y);
+  }
+  return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len;
+}
+
+/**
+ * 区間を折れ線で近似するのに要する分割数。
+ *
+ * 制御点の弦からのずれ d が曲がりの強さを表す。3 次ベジェを n 等分した折れ線の弦誤差は
+ * およそ (3/4)·d / n² で抑えられるので、これが tolerance 以下になる最小の n を取る。
+ * closedRoundedCorners が辺に出す直線区間は制御点が弦上にある（d = 0）ため n = 1 となり、
+ * 「直線は直線のまま・頂点も増えない」が自動的に成り立つ。
+ */
+function flattenSteps(start: Point, seg: CubicBezierSegment, tolerance: number): number {
+  const deviation = Math.max(
+    chordDistance(seg.c1, start, seg.end),
+    chordDistance(seg.c2, start, seg.end),
+  );
+  if (!(deviation > 0)) {
+    return 1;
+  }
+  return clamp(Math.ceil(Math.sqrt((0.75 * deviation) / tolerance)), 1, MAX_FLATTEN_STEPS);
+}
+
+/**
+ * 閉じた頂点列を曲線補完し、その曲線を**折れ線として標本化**した頂点列を返す。
+ *
+ * SVG / PDF はベジェをそのまま出力できるが（closedCurvePathData）、3D の押し出しジオメトリ
+ * （render/scene3d）は頂点列しか受け取れない。プレビュー・エクスポート・3D が「同じ 1 本の
+ * カットライン」を共有するには、曲線化を各所で作り直すのではなく、ここで平坦化して渡すのが
+ * 唯一の整合手段になる。
+ *
+ * tolerance は入力座標と同じ単位での許容誤差（弦と曲線のずれ）。曲線化できない退化入力
+ * （3 頂点未満）や tolerance が非正の場合は、入力をそのまま複製して返す。
+ * 戻り値は閉じた頂点列の規約に従い、始点を末尾で繰り返さない。
+ */
+export function closedCurvePolyline(
+  points: readonly Point[],
+  tolerance: number,
+  options: ClosedCurveOptions = {},
+): Point[] {
+  const curve = closedRoundedCorners(points, options);
+  if (!curve || !(tolerance > 0)) {
+    return points.slice();
+  }
+
+  const result: Point[] = [curve.start];
+  let from = curve.start;
+  for (const seg of curve.segments) {
+    const steps = flattenSteps(from, seg, tolerance);
+    for (let i = 1; i <= steps; i++) {
+      result.push(i === steps ? seg.end : cubicAt(from, seg, i / steps));
+    }
+    from = seg.end;
+  }
+  // 閉曲線の最終区間は始点へ戻るため、末尾は curve.start の複製になる。閉じた頂点列は
+  // 始点を繰り返さない規約なので落とす。
+  result.pop();
+  return result;
 }
 
 /** 既定の座標フォーマッタ。サブピクセル精度を保ちつつ属性文字列を短く保つ。 */
