@@ -199,6 +199,7 @@ function App() {
             image={state.image}
             result={state.result}
             mmPerPixel={mmPerPixel}
+            alphaThreshold={parameters.alphaThreshold}
             status={state.status}
             onImageFile={handleImageFile}
           />
