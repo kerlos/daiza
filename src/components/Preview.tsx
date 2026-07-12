@@ -4,9 +4,9 @@
 // SVG オーバーレイ（外形・重心・差込部・台座・支持範囲・鉛直線）を画像へ重ねる、
 // (3) 転倒シミュレーション（左右の限界姿勢）をトグルで重ね描く、(4) PNG のドラッグ
 // ＆ドロップを受け付ける、(5) ホイールズーム・ドラッグパン・Fit・100% の表示操作を
-// 提供する（TODO 9）、(6) 上端・左端に実寸(mm)ルーラーを重ねる（TODO 20-1）、
-// (7) 仕上がりを確認する完成プレビューモードへ切り替える（TODO 22-2）、
-// (8) 立体で確認する 3D プレビューモードへ切り替える（TODO 26）。
+// 提供する（TODO 9）、(6) 上端・左端に実寸(mm)ルーラーを重ね、同じ目盛りの実寸グリッドを
+// トグルで背面へ敷く（TODO 20-1 / 28）、(7) 仕上がりを確認する完成プレビューモードへ
+// 切り替える（TODO 22-2）、(8) 立体で確認する 3D プレビューモードへ切り替える（TODO 26）。
 //
 // 図形の幾何は render/overlay.ts・render/simulation.ts（いずれも純粋ロジック）が
 // 画像ピクセル座標で算出し、本コンポーネントは role ごとの見た目（色・線種）を与えて
@@ -21,8 +21,19 @@
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 
-import { Box, Eye, ImageOff, Loader2, Maximize2, Minus, PersonStanding, Plus } from 'lucide-react';
+import {
+  Box,
+  Eye,
+  Grid3x3,
+  ImageOff,
+  Loader2,
+  Maximize2,
+  Minus,
+  PersonStanding,
+  Plus,
+} from 'lucide-react';
 
+import { Grid } from '@/components/Grid';
 import { RULER_SIZE_PX, Ruler } from '@/components/Ruler';
 import { Button } from '@/components/ui/button';
 import { buildOverlayShapes } from '@/render/overlay';
@@ -78,6 +89,10 @@ export function Preview({
   // 転倒シミュレーション（左右の限界姿勢）の表示切替。常時重ねると主オーバーレイが
   // 埋もれるため、必要な時だけ見せられるようトグルにする（初期は非表示）。
   const [showSimulation, setShowSimulation] = useState(false);
+  // 実寸(mm)グリッドの表示切替。ルーラーだけでは端の目盛りから位置を目で追う必要があるため、
+  // 方眼として画面全体へ敷けるようにする。既定は非表示（絵柄・オーバーレイの読みやすさを優先。
+  // 3D の床グリッドが既定 ON なのは、床が絵柄と重ならず寸法の手掛かりが他に無いため）。
+  const [showGrid, setShowGrid] = useState(false);
   // 完成プレビューモード（仕上がり確認）の表示切替。表示だけの切替であり、解析・パラメータ・
   // SVG エクスポートには一切影響しない（＝この state は描画分岐にのみ使う）。
   const [finishView, setFinishView] = useState(false);
@@ -238,6 +253,19 @@ export function Preview({
     >
       {image ? (
         <>
+          {/* 実寸グリッド。ルーラーと同じ目盛り位置に引くので、格子とルーラーは常に一致する。
+              stage より先に置いて背面へ敷くため、絵柄・オーバーレイを覆わず、透明 PNG の
+              抜けた部分に方眼紙のように透けて見える。2D 前提の UI なので 3D では出さない。 */}
+          {showGrid && !show3d && containerSize && mmPerPixel != null && (
+            <Grid
+              width={containerSize.width}
+              height={containerSize.height}
+              transform={transform}
+              mmPerPixel={mmPerPixel}
+              origin={rulerOrigin}
+            />
+          )}
+
           {/* 3D プレビュー：チャンクの読み込み中はインジケータを出す（初回切替時のみ）。
               2D の stage は描かないが、useViewport の変換 state は保持される。 */}
           {show3d && result && (
@@ -469,9 +497,24 @@ export function Preview({
               <PersonStanding />
             </Button>
 
-            {/* ズーム・Fit・100% は 2D の表示操作。3D ではカメラ操作が担うため出さない。 */}
+            {/* ここから下は 2D 専用の表示操作。3D ではカメラ操作・3D パネル側のトグルが
+                担うため出さない（グリッドは 3D にも床グリッドのトグルがあるので、無効化した
+                ボタンを残すと二重に見えてしまう）。 */}
             {!show3d && (
               <>
+                {/* 実寸グリッド表示切替。実寸(mm)の格子なのでスケール（mm/px）が要る。 */}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setShowGrid((v) => !v)}
+                  disabled={mmPerPixel == null}
+                  className={cn(showGrid && 'text-primary bg-primary/10')}
+                  title="グリッド表示"
+                  aria-label="グリッド表示"
+                  aria-pressed={showGrid}
+                >
+                  <Grid3x3 />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon-sm"
