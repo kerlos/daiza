@@ -7,6 +7,11 @@
 // 座標系は 2 系統存在する。混同を避けるため、フィールド名の末尾に単位を付す。
 //   - ピクセル座標系（`...Pixel` / `pixel`）：画像の左上原点・下方向が +Y。
 //   - 実寸座標系（`...Mm` / `mm`）：mm 単位。ピクセル座標を `mmPerPixel` で換算したもの。
+//
+// 上記 2 系統はいずれも**前面図の 2 次元**（X=左右／Y=上下）であり、画像には現れない
+// **奥行方向（前後）** は第 3 の軸として別に扱う。奥行軸は台座の奥行中心を原点、
+// **正 = 前（手前）／負 = 後（奥）** とし、`...DepthOffsetMm` 等の名前で表す。薄板の
+// フィギュアは奥行方向にはスリットの位置でしか動かないため、この 1 スカラーで足りる。
 
 /** 2 次元の点。座標系（px / mm）は利用側のフィールド名で区別する。 */
 export interface Point {
@@ -114,6 +119,15 @@ export interface AnalysisParameters {
    */
   slotOffsetMm: number;
   /**
+   * 差込口の前後オフセット(mm)。台座の奥行中心を原点とした奥行方向（正=前／負=後）の
+   * スリット位置。0 で台座の奥行中心にスリットが来る。薄板は差し込まれた面がそのまま
+   * 重心の奥行位置になるため、この値が前後の転倒角（analysis/stability）を左右する。
+   *
+   * スリット（幅 = 板厚）が台座からはみ出す指定（板厚/2 + |オフセット| > 台座奥行/2）は
+   * 台座計算不可とする（analysis/base）。初期値 0。
+   */
+  slotDepthOffsetMm: number;
+  /**
    * 首部幅(mm)。差込部は「首部（板と台座の間を埋める矩形）」と「ツメ（スリットへ挿す矩形）」
    * の 2 段構成で、首部はツメより広い。その差分の肩（ショルダー）が台座上面に乗ることで
    * 挿入深さがツメ深さ（板厚）で止まるため、必ず 差込口幅 + 2×最小ショルダー幅 以上に保つ
@@ -133,6 +147,12 @@ export interface AnalysisParameters {
    * 幅を増やしたときに転倒角がどれだけ増えるかで判断する（結果パネルの転倒角(左)／(右)）。
    */
   baseWidthMm: number;
+  /**
+   * 台座奥行(mm)。台座幅と同じく**ユーザー指定値がそのまま実寸の奥行**になる（自動算出しない）。
+   * 前面図には現れない上面図の寸法で、スリット（幅 = 板厚）を内包する必要がある。前後方向の
+   * 倒れにくさは転倒角(前)／(後) で判断する（結果パネル）。
+   */
+  baseDepthMm: number;
 }
 
 /** 重心解析の結果。 */
@@ -187,6 +207,12 @@ export interface SlotResult {
   neckWidthMm: number;
   /** ツメ深さ(mm)。板厚と同じで、台座を貫通しない（≦ 台座奥行）。 */
   tabDepthMm: number;
+  /**
+   * スリットの奥行位置(mm)。台座の奥行中心を原点とし、正=前／負=後
+   * （AnalysisParameters.slotDepthOffsetMm をそのまま保持）。上面図でのスリット中心であり、
+   * 薄板の重心の奥行位置でもある（前後の転倒角の基準）。
+   */
+  depthOffsetMm: number;
 }
 
 /**
@@ -197,7 +223,10 @@ export interface SlotResult {
 export interface BaseResult {
   /** 台座幅(mm)。ユーザー指定値（AnalysisParameters.baseWidthMm）がそのまま入る。 */
   widthMm: number;
-  /** 推奨奥行(mm)。ツメ深さ（板厚）を内包し、貫通しない大きさを保証する。 */
+  /**
+   * 台座奥行(mm)。ユーザー指定値（AnalysisParameters.baseDepthMm）がそのまま入る。
+   * スリット（幅 = 板厚、位置 = slot.depthOffsetMm）を内包することは computeBase が検査済み。
+   */
   depthMm: number;
   /**
    * 台座上面 Y（実寸 mm 座標系）。カットライン最下端 + 持ち上げ量。
@@ -210,12 +239,19 @@ export interface BaseResult {
   supportRightMm: number;
 }
 
-/** 転倒シミュレーションの結果。左右方向それぞれの転倒角。 */
+/**
+ * 転倒シミュレーションの結果。左右方向・前後方向それぞれの転倒角。
+ * いずれも θ = atan(支持端距離 / 重心高さ) で、支持端は台座の縁（左右は幅、前後は奥行）。
+ */
 export interface StabilityResult {
   /** 左方向へ倒れる際の転倒角(度)。θ = atan(支持端距離 / 重心高さ)。 */
   tippingAngleLeftDeg: number;
   /** 右方向へ倒れる際の転倒角(度)。 */
   tippingAngleRightDeg: number;
+  /** 前方向へ倒れる際の転倒角(度)。支持端距離 = 台座奥行/2 − 差込口の前後オフセット。 */
+  tippingAngleFrontDeg: number;
+  /** 後方向へ倒れる際の転倒角(度)。支持端距離 = 台座奥行/2 + 差込口の前後オフセット。 */
+  tippingAngleBackDeg: number;
 }
 
 /**

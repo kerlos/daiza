@@ -389,6 +389,34 @@
       生成中の二重実行防止
 - [ ] Illustrator 実機で `.ai` を開き、レイヤー・実寸・パス編集可否を確認する
 
+## 25. 差込部の肩の直角保持・台座奥行/前後オフセットの指定・台座スリットの出力
+
+曲線補完がカットライン全体に効くため、差込部の肩（首部とツメの接合部）まで丸まり、ツメ根元が
+太ってスリットへ入らない状態だった。あわせて台座の奥行を自動算出（目標転倒角15°・スリット壁
+係数3）からユーザー指定へ変更し、前後方向の安定も転倒角で判断できるようにする。
+
+- [x] `utils/curve.ts`：`sharpCorners`（丸めない頂点を座標で指定）を `closedRoundedCorners` /
+      `closedCurvePathData` に追加。指定頂点は A=B=頂点 に潰して折れ線のまま通し、長さ 0 の
+      コーナー弧は出力しない
+- [x] `analysis/slot.ts`：`slotJunctionCorners`（台座上面ライン上の 4 点＝首部下端の角×2・
+      ツメ根元の角×2）を追加。`render/overlay.ts`・`export/geometry.ts` が各座標系へ換算して
+      `sharpCorners` として渡す（Preview / SVG / .ai の 3 経路が同じ除外点を共有）
+- [x] パラメータ「台座奥行（`baseDepthMm`、既定 30mm）」「差込口の前後オフセット
+      （`slotDepthOffsetMm`、既定 0、正=前）」を追加（`model/types.ts`・`model/state.ts`・
+      `components/LeftPanel.tsx`）
+- [x] `analysis/base.ts`：奥行の自動算出（`DEPTH_TARGET_TIPPING_ANGLE_DEG` / `SLOT_WALL_FACTOR`）を
+      廃止し、指定奥行の**検査**へ置き換え。必要奥行 = `板厚 + 2 × |前後オフセット|` を下回る指定は
+      `baseCalculationFailed`（＝ツメが台座を貫通しないことも構成的に保証）
+- [x] `analysis/stability.ts`：前後の転倒角を追加。台座の奥行中心を原点とする 1 軸で、
+      支持端距離(前) = `奥行/2 − 前後オフセット`／(後) = `奥行/2 + 前後オフセット`
+- [x] `components/ResultPanel.tsx`：「推奨奥行」→「台座奥行」、転倒角(前)／(後) を追加
+- [x] `export/geometry.ts`：台座 footprint（上面図）の内側にスリット矩形 `baseSlot` を追加
+      （幅=差込口幅・開口=板厚・中心=奥行中心+前後オフセット。footprint の下辺が前）。
+      SVG／.ai の双方が同じ矩形を出力する
+- [x] `docs/SPEC.md`・`README.md`・`CLAUDE.md` を更新（曲線補完の例外・台座奥行・前後オフセット・
+      台座サイズの検査・結果表示・エクスポート）
+- [x] ブラウザ実機で肩の直角・台座スリットの位置を目視確認する
+
 ## 将来拡張（バックログ）
 
 - [ ] 複数差込口

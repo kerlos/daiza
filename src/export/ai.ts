@@ -170,18 +170,25 @@ export async function generateAi(result: AnalysisResult, png: EmbeddedPng): Prom
   });
 
   // 差込口・台座。外形（カットライン）にも含まれる形だが、加工時に判別できるよう
-  // 独立した矩形としても出す（SVG と同じ方針）。
+  // 独立した矩形としても出す（SVG と同じ方針）。台座に切るスリットは台座の内側の
+  // 切り抜き線なので、台座の後（前面）に描く。
   inLayer('base', () => {
     strokePath(rectPathData(rectToPt(geometry.base, viewBox), fmtPt), EXPORT_COLORS.base);
     strokePath(rectPathData(rectToPt(geometry.neck, viewBox), fmtPt), EXPORT_COLORS.slot);
     strokePath(rectPathData(rectToPt(geometry.tab, viewBox), fmtPt), EXPORT_COLORS.slot);
+    strokePath(rectPathData(rectToPt(geometry.baseSlot, viewBox), fmtPt), EXPORT_COLORS.slot);
   });
 
   // カットライン（最前面）。曲線補完した点列をそのままベジェパスとして出すので、
-  // Illustrator 上でもアンカー付きのパスとして編集できる。
+  // Illustrator 上でもアンカー付きのパスとして編集できる。差込部の肩（首部とツメの接合部）
+  // だけは丸めず直角のまま出す。除外点も contour と同じ写像を通すことで座標一致を保つ。
   inLayer('cutline', () => {
     const contourPt = geometry.contour.map((p) => toPt(p, viewBox));
-    strokePath(closedCurvePathData(contourPt, fmtPt), EXPORT_COLORS.contour);
+    const sharpPt = geometry.sharpCorners.map((p) => toPt(p, viewBox));
+    strokePath(
+      closedCurvePathData(contourPt, fmtPt, { sharpCorners: sharpPt }),
+      EXPORT_COLORS.contour,
+    );
   });
 
   return doc.save();

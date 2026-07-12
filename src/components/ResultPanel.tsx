@@ -50,7 +50,7 @@ function buildRows(result: AnalysisResult | null): ResultRow[] {
     { label: '差込口中心', value: num(result?.slot.centerXMm, 'mm') },
     { label: '差込口幅', value: num(result?.slot.widthMm, 'mm') },
     { label: '台座幅', value: num(result?.base.widthMm, 'mm') },
-    { label: '推奨奥行', value: num(result?.base.depthMm, 'mm') },
+    { label: '台座奥行', value: num(result?.base.depthMm, 'mm') },
     {
       label: '転倒角（左）',
       value: num(result?.stability.tippingAngleLeftDeg, '°'),
@@ -58,6 +58,14 @@ function buildRows(result: AnalysisResult | null): ResultRow[] {
     {
       label: '転倒角（右）',
       value: num(result?.stability.tippingAngleRightDeg, '°'),
+    },
+    {
+      label: '転倒角（前）',
+      value: num(result?.stability.tippingAngleFrontDeg, '°'),
+    },
+    {
+      label: '転倒角（後）',
+      value: num(result?.stability.tippingAngleBackDeg, '°'),
     },
   ];
 }

@@ -61,8 +61,9 @@ export function generateSvg(result: AnalysisResult, options: SvgExportOptions = 
   const viewBoxAttr = `${fmt(viewBox.x)} ${fmt(viewBox.y)} ${fmt(viewBox.width)} ${fmt(viewBox.height)}`;
 
   // 外形（カットライン）は折れ線ではなく曲線補完した path（C コマンド）で出力する（SPEC 要件）。
+  // 差込部の肩（首部とツメの接合部）だけは丸めず直角のまま出す（加工寸法に直結するため）。
   const contourEl =
-    `<path d="${closedCurvePathData(geometry.contour, fmt)}" ` +
+    `<path d="${closedCurvePathData(geometry.contour, fmt, { sharpCorners: geometry.sharpCorners })}" ` +
     `fill="none" stroke="${EXPORT_COLORS.contour}" ${strokeAttr} />`;
   // 差込部は首部・ツメの 2 矩形。どちらも外形（カットライン）に含まれるが、加工時に
   // 差込部だと判別できるよう独立した矩形としても出力する。
@@ -78,6 +79,11 @@ export function generateSvg(result: AnalysisResult, options: SvgExportOptions = 
     geometry.base,
     `fill="none" stroke="${EXPORT_COLORS.base}" ${strokeAttr}`,
   );
+  // 台座に切るスリット（差込口）。台座の内側に置かれるため、台座より後に描いて重ねる。
+  const baseSlotEl = rectElement(
+    geometry.baseSlot,
+    `fill="none" stroke="${EXPORT_COLORS.slot}" ${strokeAttr}`,
+  );
 
   // 画像は線データに隠されないよう最背面（先頭）へ。fill/stroke の既定は g に持たせるが、
   // image はそれらの影響を受けないのでグループ内に置いて差し支えない。
@@ -87,6 +93,7 @@ export function generateSvg(result: AnalysisResult, options: SvgExportOptions = 
     neckEl,
     tabEl,
     baseEl,
+    baseSlotEl,
   ];
 
   // width/height に "mm" を付け、viewBox の数値を mm と 1:1 対応させて実寸出力とする。

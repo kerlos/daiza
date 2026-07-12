@@ -8,6 +8,7 @@
 //
 // 座標系：解析と同じくピクセル左上原点・下方向 +Y を維持し、mmPerPixel で mm へ換算する。
 
+import { slotJunctionCorners } from '@/analysis/slot';
 import type { AnalysisResult, Point } from '@/model/types';
 
 /** 図形を配置する余白(mm)。外接矩形の外周に取り、線が縁で切れないようにする。 */
@@ -51,12 +52,22 @@ export interface RectMm {
 export interface ExportGeometry {
   /** 外形（アクリル板本体＋首部＋ツメを一体化したカットライン）の頂点列（mm）。 */
   contour: readonly Point[];
+  /**
+   * 外形のうち曲線補完で丸めない頂点（差込部の肩＝首部とツメの接合部、mm）。
+   * contour と同じ mm 換算を通しているため、頂点列に現れる座標と厳密に一致する。
+   */
+  sharpCorners: readonly Point[];
   /** 差込部の首部（mm）。 */
   neck: RectMm;
   /** 差込部のツメ（mm）。台座上面から板厚ぶん下へ伸びる。 */
   tab: RectMm;
   /** 台座（台座上面へ上辺を合わせて置く実寸の footprint、mm）。 */
   base: RectMm;
+  /**
+   * 台座に切るスリット（差込口）の footprint（mm）。base の内側にある切り抜き線であり、
+   * これを台座と同じ図に出すことで、台座パーツだけを見て加工できる（SPEC「エクスポート」）。
+   */
+  baseSlot: RectMm;
   /** 絵柄画像を実寸で置く矩形（mm）。画像は解析と同じ左上原点なので常に原点始まり。 */
   image: RectMm;
   /** 全要素を包む外接矩形に余白を足した領域（mm）。 */
@@ -81,6 +92,11 @@ export interface ExportGeometryOptions {
  * **台座上面**（base.topYMm＝カットライン最下端＋持ち上げ量）に上辺を合わせて下方向へ描く。
  * これにより幅・奥行の両方を実寸のまま 1 枚の図へ載せつつ、板本体が台座と重ならないこと・
  * ツメ（深さ=板厚 ≦ 奥行）が台座を貫通しないことが出力形状の上でも保証される。
+ *
+ * この台座 footprint は上面図（真上から見た平面）なので、その**縦方向が奥行軸**になる。
+ * 上辺（台座上面 Y）を台座の後縁、下辺を前縁とみなす（真上から見て手前が下＝前）。
+ * 差込口の前後オフセット（正=前）は下方向のずれとして写り、スリットは
+ * 「奥行中心 + 前後オフセット」を中心に板厚ぶんの幅で切られる。
  */
 export function buildExportGeometry(
   result: AnalysisResult,
@@ -91,7 +107,8 @@ export function buildExportGeometry(
   // 台座上面の実寸 Y。首部の下端・ツメの上端・台座の上辺が共有する基準線。
   const baseTopYMm = base.topYMm;
 
-  const contourMm = contour.map((p) => ({ x: p.x * mmPerPixel, y: p.y * mmPerPixel }));
+  const toMm = (p: Point): Point => ({ x: p.x * mmPerPixel, y: p.y * mmPerPixel });
+  const contourMm = contour.map(toMm);
 
   // 首部：幅は mm を直接使い、上端はカットライン下辺との接続位置（ピクセル）から換算する。
   const neckTopYMm = slot.neck.yPixel * mmPerPixel;
@@ -118,6 +135,17 @@ export function buildExportGeometry(
     height: base.depthMm,
   };
 
+  // 台座に切るスリット：上面図なので幅 = 差込口幅（ツメ幅）、奥行方向の開口 = 板厚。
+  // 中心は「台座の奥行中心 + 前後オフセット」（下方向が前）。base.ts がスリットの内包
+  // （板厚/2 + |前後オフセット| ≦ 奥行/2）を検査済みなので、この矩形は必ず台座の内側に収まる。
+  const slitCenterYMm = baseTopYMm + base.depthMm / 2 + slot.depthOffsetMm;
+  const baseSlotRect: RectMm = {
+    x: slot.centerXMm - slot.widthMm / 2,
+    y: slitCenterYMm - slot.tabDepthMm / 2,
+    width: slot.widthMm,
+    height: slot.tabDepthMm,
+  };
+
   // 絵柄画像：解析と同じ画素座標系にそのまま乗るので、原点から実寸サイズぶん。
   const imageRect: RectMm = {
     x: 0,
@@ -130,9 +158,12 @@ export function buildExportGeometry(
 
   return {
     contour: contourMm,
+    // 曲線補完の除外点も contour と同じ mm 換算を通すことで、頂点列の座標と厳密に一致させる。
+    sharpCorners: slotJunctionCorners(slot).map(toMm),
     neck: neckRect,
     tab: tabRect,
     base: baseRect,
+    baseSlot: baseSlotRect,
     image: imageRect,
     viewBox: computeViewBox(contourMm, bounds),
   };

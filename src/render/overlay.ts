@@ -9,12 +9,18 @@
 // この座標をそのまま viewBox にとった SVG で描くため、ズーム/パン（TODO 9）は
 // SVG 側の座標変換だけで完結し、本モジュールは影響を受けない。
 
+import { slotJunctionCorners } from '@/analysis/slot';
 import type { AnalysisResult, Point } from '@/model/types';
 
 /** 外形（半透明の塗り）。ピクセル座標の頂点列。 */
 export interface OverlayPolygon {
   readonly role: 'contour';
   readonly points: readonly Point[];
+  /**
+   * 曲線補完で丸めない頂点（差込部の肩＝首部とツメの接合部）。描画層はこれを
+   * utils/curve の sharpCorners としてそのまま渡す（analysis/slot の slotJunctionCorners 参照）。
+   */
+  readonly sharpCorners: readonly Point[];
 }
 
 /** 重心マーカー（赤丸）。半径はピクセル単位。 */
@@ -130,7 +136,7 @@ export function buildOverlayShapes(result: AnalysisResult): OverlayShapes {
   };
 
   return {
-    contour: { role: 'contour', points: contour },
+    contour: { role: 'contour', points: contour, sharpCorners: slotJunctionCorners(slot) },
     centroid: {
       role: 'centroid',
       center: centroid.pixel,

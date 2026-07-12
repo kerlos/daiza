@@ -11,8 +11,12 @@
 // 滑らかにつながる。丸め量は辺長への比率で決めるためスケール不変で、重心・台座・境界計算は
 // 頂点列のまま行いつつ、描画・エクスポートだけを曲線として出力できる。
 //
-// オーバーレイ（Preview の SVG）と SVG エクスポートの双方がこのモジュールで path の `d`
-// 属性を組み立てる。座標系（px / mm）や丸め桁は呼び出し側で異なるため、数値の文字列化は
+// 例外として、丸めてはならない角（差込部の肩＝首部とツメの接合部）は options.sharpCorners で
+// 指定して直角のまま通せる。カットラインは板本体と差込部を一体化した 1 本のポリゴンなので、
+// 「絵柄由来の角は丸め、加工寸法に直結する角は残す」を頂点単位で指定する必要がある。
+//
+// オーバーレイ（Preview の SVG）と SVG / .ai エクスポートがこのモジュールで path の `d`
+// 属性を組み立てる。座標系（px / mm / pt）や丸め桁は呼び出し側で異なるため、数値の文字列化は
 // format コールバックで外から与える。
 
 import type { Point } from '@/model/types';
@@ -47,6 +51,28 @@ const CORNER_ROUND_RATIO = 0.25;
 /** 辺長がこれ未満の頂点は方向が定まらないため丸めをスキップ（＝その頂点は鋭角のまま通す）。 */
 const MIN_EDGE_LEN = 1e-9;
 
+/**
+ * sharpCorners を頂点列へ対応づける際の許容距離。
+ *
+ * 呼び出し側は「解析が生成した頂点そのもの」を座標で指定する（頂点インデックスは
+ * polygon-clipping による外形合成で入れ替わるため使えない）。したがって照合は一致判定に
+ * 近く、ここで吸収したいのは mm / pt への線形換算で入る丸め誤差だけ。無関係な隣接頂点を
+ * 巻き込まないよう、単位に依らず十分小さい値（px / mm / pt いずれでも 1μm 相当以下）に取る。
+ */
+const SHARP_MATCH_EPSILON = 1e-3;
+
+/** closedRoundedCorners / closedCurvePathData の切り替え。 */
+export interface ClosedCurveOptions {
+  /**
+   * 曲線補完せず角のまま通す頂点（座標で指定。頂点列に無い座標は無視される）。
+   *
+   * 差込部の肩（首部とツメの接合部）のように、台座と噛み合う機能面の直角は丸めてはならない
+   * （丸めるとツメ根元が太ってスリットへ入らない・肩が台座上面に密着しない）。カットラインは
+   * 板本体と差込部を一体化した 1 本のポリゴンなので、この例外は「どの頂点か」でしか表せない。
+   */
+  sharpCorners?: readonly Point[];
+}
+
 /** a→b 上を a から比率 t だけ進んだ点。直線区間の制御点配置に使う。 */
 function lerp(a: Point, b: Point, t: number): Point {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
@@ -74,6 +100,34 @@ function cornerHandleRatio(cosTheta: number): number {
 }
 
 /**
+ * sharpCorners で指定された座標に対応する頂点のインデックス集合を求める。
+ *
+ * 各指定点について許容距離 [[SHARP_MATCH_EPSILON]] 内で最も近い頂点を 1 つだけ選ぶ。
+ * 対応する頂点が存在しない指定（差込部が外形へ現れない退化ケース等）は単に無視され、
+ * その頂点は通常どおり丸められる（曲線補完自体は壊れない）。
+ */
+function sharpIndicesOf(points: readonly Point[], corners: readonly Point[]): Set<number> {
+  const indices = new Set<number>();
+  for (const corner of corners) {
+    let best = -1;
+    let bestDist = SHARP_MATCH_EPSILON;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      if (!p) continue;
+      const dist = Math.hypot(p.x - corner.x, p.y - corner.y);
+      if (dist <= bestDist) {
+        best = i;
+        bestDist = dist;
+      }
+    }
+    if (best >= 0) {
+      indices.add(best);
+    }
+  }
+  return indices;
+}
+
+/**
  * 閉じた頂点列を、各コーナーを局所的に丸めた曲線（3 次ベジェ列）へ変換する。
  *
  * 各頂点 V について、入り辺・出辺に沿って r = min(入り辺長, 出辺長) * [[CORNER_ROUND_RATIO]]
@@ -83,12 +137,21 @@ function cornerHandleRatio(cosTheta: number): number {
  * 保たれ、四角形のような外形が樽型に歪まない。丸め区間は隣接辺の短い方の半分以内に収まる
  * （比率 ≤ 0.5）ため、隣り合うコーナーの丸めが重ならない。頂点が 3 未満だと面積を持つ閉曲線に
  * ならないため null を返し、呼び出し側で折れ線へフォールバックさせる。
+ *
+ * options.sharpCorners で指定された頂点だけは丸めず、折れ線のまま（＝元の角のまま）通す。
  */
-export function closedRoundedCorners(points: readonly Point[]): ClosedCurve | null {
+export function closedRoundedCorners(
+  points: readonly Point[],
+  options: ClosedCurveOptions = {},
+): ClosedCurve | null {
   const n = points.length;
   if (n < 3) {
     return null;
   }
+
+  const sharp = options.sharpCorners?.length
+    ? sharpIndicesOf(points, options.sharpCorners)
+    : null;
 
   // 巡回アクセサ。?? は範囲内アクセスでは発火しないが、noUncheckedIndexedAccess を満たす。
   const at = (i: number): Point => points[((i % n) + n) % n] ?? { x: 0, y: 0 };
@@ -111,8 +174,9 @@ export function closedRoundedCorners(points: readonly Point[]): ClosedCurve | nu
     const lenIn = Math.hypot(inX, inY);
     const lenOut = Math.hypot(outX, outY);
 
-    if (lenIn < MIN_EDGE_LEN || lenOut < MIN_EDGE_LEN) {
-      // 退化辺（重複点）。方向が定まらないので丸めず頂点をそのまま通す。
+    if (sharp?.has(i) || lenIn < MIN_EDGE_LEN || lenOut < MIN_EDGE_LEN) {
+      // 丸めない頂点：機能面の直角（sharpCorners）か、方向の定まらない退化辺（重複点）。
+      // A=B=頂点 に潰すことで、前後の辺が頂点まで直線で届き、角がそのまま残る。
       enter.push(cur);
       leave.push(cur);
       handleIn.push(cur);
@@ -136,10 +200,14 @@ export function closedRoundedCorners(points: readonly Point[]): ClosedCurve | nu
   // 直線辺は端点を 1/3・2/3 で内分した制御点にすることで 3 次ベジェとして厳密な直線になる。
   const segments: CubicBezierSegment[] = [];
   for (let i = 0; i < n; i++) {
+    const a = enter[i] ?? at(i);
     const b = leave[i] ?? at(i);
     const nextA = enter[(i + 1) % n] ?? at(i + 1);
     // コーナー弧：制御点は頂点そのものではなく、両辺に接する円弧に合わせて短縮したハンドル。
-    segments.push({ c1: handleIn[i] ?? b, c2: handleOut[i] ?? b, end: b });
+    // 丸めない頂点（A=B）は弧が長さ 0 になるので、無意味な区間を出力しない。
+    if (a.x !== b.x || a.y !== b.y) {
+      segments.push({ c1: handleIn[i] ?? b, c2: handleOut[i] ?? b, end: b });
+    }
     // 直線辺：B_i → 次コーナーの A_{i+1}。
     segments.push({ c1: lerp(b, nextA, 1 / 3), c2: lerp(b, nextA, 2 / 3), end: nextA });
   }
@@ -161,9 +229,10 @@ function defaultFormat(value: number): string {
 export function closedCurvePathData(
   points: readonly Point[],
   format: (value: number) => string = defaultFormat,
+  options: ClosedCurveOptions = {},
 ): string {
   const f = format;
-  const curve = closedRoundedCorners(points);
+  const curve = closedRoundedCorners(points, options);
 
   if (!curve) {
     // 頂点不足で曲線化できない。持っている頂点をそのまま折れ線でつなぐ。

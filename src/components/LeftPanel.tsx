@@ -309,6 +309,15 @@ export function LeftPanel({ parameters, onParametersChange, onImageFile }: LeftP
             onValueChange={(slotOffsetMm) => onParametersChange({ slotOffsetMm })}
           />
           <NumberField
+            id="slot-depth-offset"
+            label="差込口の前後オフセット（正=前／負=後）"
+            unit="mm"
+            value={parameters.slotDepthOffsetMm}
+            constraint={PARAMETER_CONSTRAINTS.slotDepthOffsetMm}
+            onValueChange={(slotDepthOffsetMm) => onParametersChange({ slotDepthOffsetMm })}
+            hint="台座の奥行中心から見たスリットの位置。前後の転倒角のバランスを調整する。"
+          />
+          <NumberField
             id="neck-width"
             label={`首部幅（下限 ${neckWidth.min}mm）`}
             unit="mm"
@@ -332,6 +341,15 @@ export function LeftPanel({ parameters, onParametersChange, onImageFile }: LeftP
             value={parameters.baseWidthMm}
             constraint={PARAMETER_CONSTRAINTS.baseWidthMm}
             onValueChange={(baseWidthMm) => onParametersChange({ baseWidthMm })}
+          />
+          <NumberField
+            id="base-depth"
+            label="台座奥行"
+            unit="mm"
+            value={parameters.baseDepthMm}
+            constraint={PARAMETER_CONSTRAINTS.baseDepthMm}
+            onValueChange={(baseDepthMm) => onParametersChange({ baseDepthMm })}
+            hint="前面図には現れない上面図の寸法。前後の倒れにくさは転倒角（前）／（後）で判断する。"
           />
         </CardContent>
       </Card>
