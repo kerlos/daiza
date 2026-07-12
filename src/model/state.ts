@@ -37,12 +37,16 @@ export const DEFAULT_PARAMETERS: AnalysisParameters = {
   slotWidthMm: 20,
   // 差込口は既定で重心の真下（オフセット 0）。
   slotOffsetMm: 0,
+  // 前後も既定で台座の奥行中心（オフセット 0）。前後の転倒角が左右対称に最大化される位置。
+  slotDepthOffsetMm: 0,
   // 首部は差込口幅（20mm）より十分広く取り、肩を確保する。
   neckWidthMm: 40,
   // 既定では板の下端が台座上面にちょうど接する（持ち上げなし）。
   plateLiftMm: 0,
   // 台座幅は指定値がそのまま実寸になる（余白ではない）。一般的なアクリルスタンドの台座幅。
   baseWidthMm: 50,
+  // 台座奥行も指定値がそのまま実寸。一般的なアクリルスタンドの台座奥行。
+  baseDepthMm: 30,
 };
 
 /**
@@ -90,11 +94,16 @@ export const PARAMETER_CONSTRAINTS = {
   slotWidthMm: { min: 0.1, max: 50, step: 0.1 },
   // オフセットは左右対称に振れるよう負値も許容する（正=右／負=左）。
   slotOffsetMm: { min: -50, max: 50, step: 0.5 },
+  // 前後オフセットも同様に負値を許容する（正=前／負=後）。実効範囲は台座奥行と板厚で決まり、
+  // スリットが台座からはみ出す指定は analysis/base が台座計算不可として弾く。
+  slotDepthOffsetMm: { min: -150, max: 150, step: 0.5 },
   // 首部幅の実効下限は差込口幅に連動する（minNeckWidthMm）。ここでの min は絶対的な床。
   neckWidthMm: { min: 1, max: 100, step: 0.5 },
   plateLiftMm: { min: 0, max: 50, step: 0.5 },
   // 指定値がそのまま台座の実寸幅になるため、下限は「スリットが切れる」程度の正値に取る。
   baseWidthMm: { min: 1, max: 300, step: 1 },
+  // 奥行も指定値がそのまま実寸。実効下限は板厚（スリットを内包できること）に連動する。
+  baseDepthMm: { min: 1, max: 300, step: 1 },
 } as const satisfies Record<keyof AnalysisParameters, { min: number; max: number; step: number }>;
 
 /**

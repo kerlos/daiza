@@ -63,7 +63,7 @@ const ERROR_MESSAGES: Record<PipelineErrorKind, string> = {
   slotPlacementFailed:
     '差込部（首部・ツメ）を配置できません。差込口オフセットを小さくする、首部幅を差込口幅より大きくする、などパラメータを見直してください。',
   baseCalculationFailed:
-    '台座サイズを計算できません。指定した台座幅では重心を支えられない可能性があります。台座幅を広げる、差込口オフセットを小さくする、などパラメータを見直してください。',
+    '台座サイズを計算できません。指定した台座幅では重心を支えられない、または指定した台座奥行にスリット（幅=板厚）が収まらない可能性があります。台座幅・台座奥行を広げる、差込口オフセット（左右・前後）を小さくする、などパラメータを見直してください。',
 };
 
 /** 解析の成否。成功なら結果一式、失敗なら型付きエラー。 */
@@ -378,7 +378,7 @@ export function runAnalysis(
   }
 
   // 転倒角の失敗（重心高さ 0 等）も、幾何的に自立し得ない＝台座計算不可の一種として扱う。
-  const stability = computeStability(centroid, base);
+  const stability = computeStability(centroid, slot, base);
   if (!stability) {
     return fail('baseCalculationFailed');
   }

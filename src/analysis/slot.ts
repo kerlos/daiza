@@ -24,7 +24,7 @@
 import { lowerCrossing } from '@/analysis/contour';
 import { pixelLengthToMm } from '@/analysis/scale';
 import { minNeckWidthMm } from '@/model/state';
-import type { AnalysisParameters, Centroid, Contour, SlotResult } from '@/model/types';
+import type { AnalysisParameters, Centroid, Contour, Point, SlotResult } from '@/model/types';
 
 /**
  * 差込部（首部・ツメ）の位置と形状を決める。
@@ -46,7 +46,7 @@ export function findSlot(
   mmPerPixel: number,
   baseTopYPixel: number,
 ): SlotResult | null {
-  const { slotWidthMm, slotOffsetMm, neckWidthMm, thicknessMm } = params;
+  const { slotWidthMm, slotOffsetMm, slotDepthOffsetMm, neckWidthMm, thicknessMm } = params;
 
   if (contour.length < 3 || !(mmPerPixel > 0) || !Number.isFinite(baseTopYPixel)) {
     return null;
@@ -111,5 +111,37 @@ export function findSlot(
     neckWidthMm,
     // ツメ深さは板厚に固定（SPEC）。台座奥行はこの値を内包する大きさに取られる（base.ts）。
     tabDepthMm: thicknessMm,
+    // 奥行方向は前面図（ピクセル座標）に現れないため、mm のスカラーとしてそのまま持ち回る。
+    // 台座奥行がこれを内包できるか（スリットが縁を割らないか）は base.ts が検査する。
+    depthOffsetMm: slotDepthOffsetMm,
   };
+}
+
+/**
+ * 曲線補完で丸めてはならない差込部の角（＝台座上面ライン上の 4 点）を返す（ピクセル座標）。
+ *
+ * 差込部の肩は「首部の下端 → 台座上面に沿って内側へ → ツメの側面」と 2 度直角に折れる：
+ *
+ *      │ 首部        ┌─ 首部下端の角（首部側面と肩の折れ）
+ *      └────┐ ←──────┘
+ *           │ ←─ ツメ根元の角（肩とツメ側面の折れ＝首部とツメの接合部）
+ *           │ ツメ
+ *
+ * この 4 点（左右 × 2）はいずれも台座と噛み合う機能面の直角であり、丸めると
+ * ・ツメ根元が太ってスリット（幅 = 差込口幅）へ入らない
+ * ・肩が台座上面へ密着せず、挿入深さのストッパーとして働かない
+ * という実害が出る。絵柄由来の角は丸めたいので、カットライン全体の曲線補完は活かしたまま、
+ * この頂点だけを utils/curve の sharpCorners として除外する。
+ *
+ * 返すのは attachSlotBody / unionSlotRects が外形へ載せるのと同じ座標なので、外形の頂点列
+ * にそのまま現れる（曲線補完側は座標一致でこの頂点を見つける）。
+ */
+export function slotJunctionCorners(slot: SlotResult): Point[] {
+  const y = slot.baseTopYPixel;
+  return [
+    { x: slot.neck.xPixel, y },
+    { x: slot.tab.xPixel, y },
+    { x: slot.tab.xPixel + slot.tab.widthPixel, y },
+    { x: slot.neck.xPixel + slot.neck.widthPixel, y },
+  ];
 }

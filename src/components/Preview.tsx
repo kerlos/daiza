@@ -152,11 +152,17 @@ export function Preview({ image, result, mmPerPixel, status, onImageFile }: Prev
     ctx.drawImage(image.bitmap, 0, 0);
   }, [image]);
 
-  // 外形カットラインの曲線パス（d 属性）。折れ線ではなく Catmull-Rom で曲線補完して
-  // 描く（SPEC「曲線補完」）。ズーム/パンのたびに再レンダーされるため、JSX から切り出して
-  // overlay 変化時のみ再計算する。主外形・転倒シミュレーション（2 姿勢）で同じパスを共有する。
+  // 外形カットラインの曲線パス（d 属性）。折れ線ではなくコーナーカットで曲線補完して描く
+  // （SPEC「曲線補完」）。差込部の肩（首部とツメの接合部）だけは加工寸法に直結する直角なので
+  // 丸めない。ズーム/パンのたびに再レンダーされるため、JSX から切り出して overlay 変化時のみ
+  // 再計算する。主外形・転倒シミュレーション（2 姿勢）で同じパスを共有する。
   const contourPathD = useMemo(
-    () => (overlay ? closedCurvePathData(overlay.contour.points) : ''),
+    () =>
+      overlay
+        ? closedCurvePathData(overlay.contour.points, undefined, {
+            sharpCorners: overlay.contour.sharpCorners,
+          })
+        : '',
     [overlay],
   );
 
