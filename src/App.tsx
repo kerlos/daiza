@@ -7,6 +7,7 @@ import { useCallback, useMemo, useState, type CSSProperties } from 'react';
 import { loadPngFile } from '@/analysis/imageLoader';
 import { computeMmPerPixel } from '@/analysis/scale';
 import { ExportPanel } from '@/components/ExportPanel';
+import { HeaderActions } from '@/components/HeaderActions';
 import { LeftPanel } from '@/components/LeftPanel';
 import { PaneResizer } from '@/components/PaneResizer';
 import { Preview } from '@/components/Preview';
@@ -146,9 +147,13 @@ function App() {
 
   return (
     <div className="bg-background flex h-svh flex-col">
-      <header className="flex shrink-0 items-baseline gap-3 border-b px-4 py-3">
+      <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
         <h1 className="text-lg font-bold">Daiza</h1>
-        <p className="text-muted-foreground text-sm">アクリルフィギュア台座設計ツール</p>
+        <p className="text-muted-foreground hidden text-sm sm:block">
+          アクリルフィギュア台座設計ツール
+        </p>
+        {/* 右端にプライバシー表明と GitHub リポジトリへの導線を常設する。 */}
+        <HeaderActions />
       </header>
 
       {/* 画面が広ければ3ペイン（左パネル／プレビュー／結果パネル）、狭ければ上下配置へ
