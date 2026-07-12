@@ -1,6 +1,6 @@
 // アプリのルート。左右2ペイン構成のレイアウトを組み、状態（useAppState）と
 // 各パネルを配線する。PNG 読み込み（TODO 4）・解析パイプライン（TODO 13）・
-// SVG エクスポート（TODO 15）を配線済み。
+// エクスポート（SVG / Adobe Illustrator）を配線済み。
 
 import { useCallback, useMemo, useState, type CSSProperties } from 'react';
 
@@ -11,18 +11,19 @@ import { LeftPanel } from '@/components/LeftPanel';
 import { PaneResizer } from '@/components/PaneResizer';
 import { Preview } from '@/components/Preview';
 import { ResultPanel } from '@/components/ResultPanel';
+import { generateAi } from '@/export/ai';
+import { bitmapToPngBytes, bitmapToPngDataUrl } from '@/export/raster';
 import { generateSvg } from '@/export/svg';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAppState } from '@/hooks/useAppState';
 import { toUnexpectedError } from '@/model/errors';
 
 /**
- * 生成した SVG 文字列をファイルとしてダウンロードさせる。
- * DOM 依存の副作用のため export/svg（純粋）から切り離し、UI 層に置く。
+ * 生成した成果物をファイルとしてダウンロードさせる。
+ * DOM 依存の副作用のため export/*（純粋）から切り離し、UI 層に置く。
  * 一時的な Blob URL は生成した a 要素のクリック後に必ず解放し、リークを防ぐ。
  */
-function downloadSvg(svg: string, fileName: string): void {
-  const blob = new Blob([svg], { type: 'image/svg+xml' });
+function downloadBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -31,10 +32,10 @@ function downloadSvg(svg: string, fileName: string): void {
   URL.revokeObjectURL(url);
 }
 
-/** 画像ファイル名（例 figure.png）から SVG 用のダウンロード名を導く。 */
-function svgFileName(imageFileName: string): string {
+/** 画像ファイル名（例 figure.png）から、指定拡張子のダウンロード名を導く。 */
+function exportFileName(imageFileName: string, extension: string): string {
   const base = imageFileName.replace(/\.[^./\\]+$/, '');
-  return `${base || 'daiza'}.svg`;
+  return `${base || 'daiza'}.${extension}`;
 }
 
 /**
@@ -95,13 +96,53 @@ function App() {
     }
     return image ? computeMmPerPixel(parameters, image.height) : null;
   }, [result, image, parameters]);
+  // SVG は線データのみが既定。絵柄が要るときだけ画像を埋め込む（ファイルは重くなる）。
+  const [embedImageInSvg, setEmbedImageInSvg] = useState(false);
+  // .ai は PDF 生成と画像の PNG 化を伴い、大きな画像では体感できる時間がかかる。
+  // 生成中はボタンを止め、二重実行を防ぐ。
+  const [exporting, setExporting] = useState(false);
+
   const handleExportSvg = useCallback(() => {
-    if (!result) {
+    if (!result || !image) {
       return;
     }
-    const svg = generateSvg(result);
-    downloadSvg(svg, svgFileName(state.image?.fileName ?? 'daiza.png'));
-  }, [result, state.image]);
+    try {
+      const svg = generateSvg(
+        result,
+        embedImageInSvg ? { imageHref: bitmapToPngDataUrl(image.bitmap) } : {},
+      );
+      downloadBlob(
+        new Blob([svg], { type: 'image/svg+xml' }),
+        exportFileName(image.fileName, 'svg'),
+      );
+    } catch (cause) {
+      // エクスポート失敗でアプリを落とさず、エラー表示へ畳む（SPEC のエラーハンドリング）。
+      actions.failAnalysis(toUnexpectedError(cause));
+    }
+  }, [result, image, embedImageInSvg, actions]);
+
+  // .ai は絵柄画像を必ず含む「絵柄付きアウトライン」。実体は PDF 互換のドキュメントで、
+  // pdf-lib を dynamic import するため生成が非同期になる。
+  const handleExportAi = useCallback(() => {
+    if (!result || !image) {
+      return;
+    }
+    setExporting(true);
+    void (async () => {
+      try {
+        const bytes = await generateAi(result, { bytes: await bitmapToPngBytes(image.bitmap) });
+        downloadBlob(
+          // .ai の中身は PDF なので MIME も PDF とする（保存名の拡張子が .ai であることが本質）。
+          new Blob([bytes as BlobPart], { type: 'application/pdf' }),
+          exportFileName(image.fileName, 'ai'),
+        );
+      } catch (cause) {
+        actions.failAnalysis(toUnexpectedError(cause));
+      } finally {
+        setExporting(false);
+      }
+    })();
+  }, [result, image, actions]);
 
   return (
     <div className="bg-background flex h-svh flex-col">
@@ -177,9 +218,14 @@ function App() {
             可変幅・列内スクロール。 */}
         <aside className="flex shrink-0 flex-col gap-4 lg:w-[var(--right-pane-width)] lg:overflow-y-auto">
           <ResultPanel result={state.result} />
-          {/* 結果がある時だけ onExportSvg を渡し、無ければ prop 自体を省いてボタンを無効化する
+          {/* 結果がある時だけ各 onExport を渡し、無ければ prop 自体を省いてボタンを無効化する
               （exactOptionalPropertyTypes 下では undefined の明示代入を避け、条件スプレッドで出し分ける）。 */}
-          <ExportPanel {...(result ? { onExportSvg: handleExportSvg } : {})} />
+          <ExportPanel
+            embedImageInSvg={embedImageInSvg}
+            onEmbedImageInSvgChange={setEmbedImageInSvg}
+            exporting={exporting}
+            {...(result ? { onExportSvg: handleExportSvg, onExportAi: handleExportAi } : {})}
+          />
         </aside>
       </main>
     </div>

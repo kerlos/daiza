@@ -47,7 +47,7 @@ src/
   components/     LeftPanel / Preview / ResultPanel   … UI（2ペイン構成）
   analysis/       imageLoader, contour, centroid, slot, base, stability  … 純粋ロジック
   render/         overlay, simulation                 … オーバーレイ描画
-  export/         svg.ts                              … 実寸(mm)座標系でSVG生成
+  export/         geometry, svg, ai, raster           … 実寸(mm)座標系でSVG / Illustrator(.ai)生成
   model/          state.ts, types.ts                  … 状態・型定義
   hooks/          useAnalysis.ts                       … 解析パイプラインの束ね
   utils/          geometry.ts, image.ts

@@ -369,6 +369,26 @@
 - [x] `docs/SPEC.md`・`README.md`：安全率の節・必要幅の式・UI 一覧・結果一覧を更新し、余裕の判断は
       転倒角で行う旨を明記
 
+## 24. Adobe Illustrator（.ai）エクスポート
+
+入稿では「絵柄が載ったアウトライン」が要る。SVG エクスポートは線データのみだったため、
+絵柄画像を埋め込んだ `.ai` 出力を追加する（`docs/SPEC.md`「エクスポート」節参照）。
+`.ai` は PDF 互換コンテナなので、PDF を生成して `.ai` として保存する。
+
+- [x] `export/geometry.ts`：mm 座標の図形一式（外形・首部・ツメ・台座・画像・viewBox）を
+      SVG と `.ai` で共有。座標変換を 1 箇所へ集約し、2 形式で形状がズレないようにする
+- [x] `export/raster.ts`：`ImageBitmap` → PNG（バイト列 / data URL）。解析用 `ImageData` は
+      Worker へ transfer 済みで残らないため、プレビュー用に保持している bitmap から作り直す
+- [x] `export/ai.ts`：pdf-lib（**dynamic import** で初期バンドルから外す）で PDF を生成。
+      mm → pt 変換、絵柄 PNG の埋め込み（α は `/SMask` へ）、カットラインは曲線パスのまま出力
+- [x] レイヤー分離：PDF の Optional Content Group で「絵柄／カットライン／差込口・台座」を
+      分け、Illustrator のレイヤーとして開けるようにする
+- [x] `export/svg.ts`：`imageHref` オプションで絵柄画像を最背面に埋め込めるようにする
+      （未指定時の出力は従来とバイト単位で一致することを確認済み）
+- [x] `ExportPanel`／`App`：`.ai` エクスポートのボタン、SVG への画像埋め込みチェックボックス、
+      生成中の二重実行防止
+- [ ] Illustrator 実機で `.ai` を開き、レイヤー・実寸・パス編集可否を確認する
+
 ## 将来拡張（バックログ）
 
 - [ ] 複数差込口
