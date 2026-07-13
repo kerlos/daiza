@@ -1,12 +1,13 @@
 // 画像プレビュー領域。
 //
-// 役割は 8 つ：(1) 読み込み済み画像を Canvas に等倍で描く、(2) 解析結果があれば
+// 役割は 9 つ：(1) 読み込み済み画像を Canvas に等倍で描く、(2) 解析結果があれば
 // SVG オーバーレイ（外形・重心・差込部・台座・支持範囲・鉛直線）を画像へ重ねる、
 // (3) 転倒シミュレーション（左右の限界姿勢）をトグルで重ね描く、(4) PNG のドラッグ
 // ＆ドロップを受け付ける、(5) ホイールズーム・ドラッグパン・ピンチ拡縮・Fit・100% の
 // 表示操作を提供する（TODO 9）、(6) 上端・左端に実寸(mm)ルーラーを重ね、同じ目盛りの実寸グリッドを
 // トグルで背面へ敷く（TODO 20-1 / 28）、(7) 仕上がりを確認する完成プレビューモードへ
-// 切り替える（TODO 22-2）、(8) 立体で確認する 3D プレビューモードへ切り替える（TODO 26）。
+// 切り替える（TODO 22-2）、(8) 立体で確認する 3D プレビューモードへ切り替える（TODO 26）、
+// (9) 解析エラー・解析中インジケータをビューワー前面へオーバーレイする。
 //
 // 図形の幾何は render/overlay.ts・render/simulation.ts（いずれも純粋ロジック）が
 // 画像ピクセル座標で算出し、本コンポーネントは role ごとの見た目（色・線種）を与えて
@@ -40,7 +41,7 @@ import { buildOverlayShapes } from '@/render/overlay';
 import { buildSimulationShapes } from '@/render/simulation';
 import { useViewport, type ContentBox } from '@/hooks/useViewport';
 import type { AnalysisStatus } from '@/model/state';
-import type { AnalysisResult, FigureImage, Point } from '@/model/types';
+import type { AnalysisError, AnalysisResult, FigureImage, Point } from '@/model/types';
 import { cn } from '@/lib/utils';
 import { closedCurvePathData } from '@/utils/curve';
 import { radToDeg } from '@/utils/geometry';
@@ -80,6 +81,12 @@ export interface PreviewProps {
   alphaThreshold?: number;
   /** 解析の進行状態。'analyzing' の間は解析中インジケータを重ねる。 */
   status?: AnalysisStatus;
+  /**
+   * 直近の解析エラー。あればビューワー前面へオーバーレイ表示する。正常時は null。
+   * プレビューの外（列の上部）へ積むとエラーの出入りでビューワーの寸法が変わってしまうため、
+   * 表示・非表示がレイアウトへ波及しないこの位置で受け取る。
+   */
+  error?: AnalysisError | null;
   /** ドロップされた PNG ファイルを通知する。未指定ならドロップは受け付けない。 */
   onImageFile?: (file: File) => void;
 }
@@ -90,6 +97,7 @@ export function Preview({
   mmPerPixel,
   alphaThreshold = 0,
   status,
+  error,
   onImageFile,
 }: PreviewProps) {
   // ドラッグ中はドロップ可能であることを視覚的に示すためのフラグ。
@@ -600,6 +608,24 @@ export function Preview({
               ? 'ここにドロップ'
               : 'PNG画像をドラッグ＆ドロップ、または読み込んでください'}
           </p>
+        </div>
+      )}
+
+      {/* エラー表示。画像の有無に関わらず（読み込み失敗もあるため）ビューワーの前面へ重ねる。
+          プレビューの外に積むと、エラーの出入りのたびにビューワーの寸法が変わって表示が
+          跳ねてしまう（SPEC「エラーハンドリング」）。位置は解析中インジケータと同じ中央上部
+          （上端ルーラーの帯 RULER_SIZE_PX より下）。エラー時は結果が無く status も 'error' なので、
+          解析中インジケータと同時には出ない。pointer-events は持たせず、読み込み失敗の直後に
+          同じ場所へ再ドロップ・再パンできる状態を保つ。 */}
+      {error && (
+        <div
+          role="alert"
+          style={{ top: RULER_SIZE_PX + 8 }}
+          // inset-x-2 + mx-auto + w-fit：内容幅の箱を中央へ置きつつ、長い文面は左右 8px の
+          // 余白を残して折り返させる（translate による中央寄せだと折り返し幅を制限できない）。
+          className="border-destructive/50 bg-background/90 text-destructive pointer-events-none absolute inset-x-2 z-20 mx-auto w-fit rounded-lg border px-4 py-2 text-sm shadow-sm backdrop-blur"
+        >
+          {error.message}
         </div>
       )}
     </div>

@@ -34,8 +34,9 @@ export const DEFAULT_PARAMETERS: AnalysisParameters = {
   cutLineSmoothing: 0,
   // 印刷・加工で潰れやすい細い隙間は既定で埋める。0 にすれば無効化できる。
   gapFillThresholdMm: 3,
-  // 分離パーツ連結部の最小幅。板厚（既定 3mm）と同程度を既定とし、細すぎる連結を防ぐ。
-  minBridgeWidthMm: 3,
+  // 分離パーツ連結部の最小幅。連結部はアクリル 1 枚を支える細い橋であり、板厚と同程度では
+  // カット時・使用時に折れやすいため、板厚（既定 3mm）の 2 倍を既定とする。
+  minBridgeWidthMm: 6,
   slotWidthMm: 20,
   // 差込口は既定で重心の真下（オフセット 0）。
   slotOffsetMm: 0,
@@ -81,6 +82,17 @@ export function normalizeParameters(params: AnalysisParameters): AnalysisParamet
 }
 
 /**
+ * 1 パラメータ分の入力制約。
+ * max は**任意**：値の大小そのものが破綻を招かないパラメータ（首部幅など）には上限を設けず、
+ * 省略する。UI 側は max が無ければ入力欄に上限を出さない（＝いくらでも大きくできる）。
+ */
+export interface ParameterConstraint {
+  min: number;
+  max?: number;
+  step: number;
+}
+
+/**
  * スライダー等の入力 UI・バリデーションで共有するパラメータ制約。
  * min/max/step を一元管理し、UI と検証のズレを防ぐ。
  */
@@ -103,13 +115,16 @@ export const PARAMETER_CONSTRAINTS = {
   // スリットが台座からはみ出す指定は analysis/base が台座計算不可として弾く。
   slotDepthOffsetMm: { min: -150, max: 150, step: 0.5 },
   // 首部幅の実効下限は差込口幅に連動する（minNeckWidthMm）。ここでの min は絶対的な床。
-  neckWidthMm: { min: 1, max: 100, step: 0.5 },
+  // 上限は設けない：妥当な首部幅は板の大きさ次第（大きなフィギュアほど肩を広く取れる）で、
+  // 一律の頭打ちには意味がないため。広げすぎて首部の左右端が板から外れる場合は、入力の
+  // 制限ではなく解析側が差込口配置不可として弾く（analysis/slot の lowerCrossing）。
+  neckWidthMm: { min: 1, step: 0.5 },
   plateLiftMm: { min: 0, max: 50, step: 0.5 },
   // 指定値がそのまま台座の実寸幅になるため、下限は「スリットが切れる」程度の正値に取る。
   baseWidthMm: { min: 1, max: 300, step: 1 },
   // 奥行も指定値がそのまま実寸。実効下限は板厚（スリットを内包できること）に連動する。
   baseDepthMm: { min: 1, max: 300, step: 1 },
-} as const satisfies Record<keyof AnalysisParameters, { min: number; max: number; step: number }>;
+} as const satisfies Record<keyof AnalysisParameters, ParameterConstraint>;
 
 /**
  * 選択式で提示する標準値プリセット。

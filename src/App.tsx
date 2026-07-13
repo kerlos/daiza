@@ -188,24 +188,18 @@ function App() {
           label="左パネルの幅"
         />
 
-        {/* 中央：プレビュー。残りの幅・高さを使い切る主役の列。エラー表示はプレビューの
-            操作（読み込み・パラメータ変更）に対する応答なので、この列の上部に置く。
-            狭幅で縦積みになったときにプレビューが潰れないよう最低高さを与える。 */}
-        <section className="flex min-h-[60vh] min-w-0 flex-1 flex-col gap-4 lg:min-h-0 lg:overflow-hidden">
-          {state.error && (
-            <div
-              role="alert"
-              className="border-destructive/50 bg-destructive/10 text-destructive rounded-lg border px-4 py-2 text-sm"
-            >
-              {state.error.message}
-            </div>
-          )}
+        {/* 中央：プレビュー。残りの幅・高さを使い切る主役の列。狭幅で縦積みになったときに
+            プレビューが潰れないよう最低高さを与える。エラー表示はプレビューの操作（読み込み・
+            パラメータ変更）に対する応答だが、この列へ積むとエラーの出入りでビューワーの高さが
+            変わってしまうため、Preview 内のオーバーレイとして前面に出す。 */}
+        <section className="flex min-h-[60vh] min-w-0 flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
           <Preview
             image={state.image}
             result={state.result}
             mmPerPixel={mmPerPixel}
             alphaThreshold={parameters.alphaThreshold}
             status={state.status}
+            error={state.error}
             onImageFile={handleImageFile}
           />
         </section>
