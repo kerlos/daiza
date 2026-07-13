@@ -23,11 +23,14 @@ export interface OverlayPolygon {
   readonly sharpCorners: readonly Point[];
 }
 
-/** 重心マーカー（赤丸）。半径はピクセル単位。 */
-export interface OverlayCircle {
+/**
+ * 重心マーカー（赤丸）の位置。半径は持たない：マーカーの大きさは解析結果ではなく
+ * 見た目の都合で決まる量であり、線幅と同じく「画面上で一定サイズ」であるべきなので、
+ * 画像ピクセル座標に依存しない描画層（components/Preview）の責務とする。
+ */
+export interface OverlayPoint {
   readonly role: 'centroid';
   readonly center: Point;
-  readonly radius: number;
 }
 
 /** 差込部の首部・ツメ（青矩形）／台座（緑矩形）。左上原点 (x, y) と幅・高さ。 */
@@ -52,7 +55,7 @@ export interface OverlaySegment {
  */
 export interface OverlayShapes {
   readonly contour: OverlayPolygon;
-  readonly centroid: OverlayCircle;
+  readonly centroid: OverlayPoint;
   /** 差込部の首部（幅=首部幅、カットライン下辺〜台座上面）。 */
   readonly neck: OverlayRect;
   /** 差込部のツメ（幅=差込口幅、台座上面から板厚ぶん下）。 */
@@ -60,17 +63,6 @@ export interface OverlayShapes {
   readonly base: OverlayRect;
   readonly support: OverlaySegment;
   readonly plumb: OverlaySegment;
-}
-
-/**
- * 重心マーカーの半径。
- * 画像解像度に比例させ、3000px 級でも豆粒にならないようにしつつ、下限も設けて
- * 小さな画像で消えないようにする。大きすぎると形状が隠れて見づらいため、SPEC の
- * 指定どおり従来（画像短辺の 1%・下限 3px）の約 50% に抑える。ズーム時に画面上で
- * 一定サイズへ保つ調整は表示操作側の責務とし、ここでは画像基準の素直な大きさを与える。
- */
-function centroidRadius(width: number, height: number): number {
-  return Math.max(1.5, Math.min(width, height) * 0.005);
 }
 
 /**
@@ -84,9 +76,7 @@ function centroidRadius(width: number, height: number): number {
  * 台座の上下関係」）。
  */
 export function buildOverlayShapes(result: AnalysisResult): OverlayShapes {
-  const { imageSize, mmPerPixel, contour, centroid, slot, base } = result;
-  const width = imageSize.width;
-  const height = imageSize.height;
+  const { mmPerPixel, contour, centroid, slot, base } = result;
 
   // 支持範囲・台座・鉛直線の基準となる台座上面（＝首部下端＝ツメ上端）。
   const baselineY = slot.baseTopYPixel;
@@ -137,11 +127,7 @@ export function buildOverlayShapes(result: AnalysisResult): OverlayShapes {
 
   return {
     contour: { role: 'contour', points: contour, sharpCorners: slotJunctionCorners(slot) },
-    centroid: {
-      role: 'centroid',
-      center: centroid.pixel,
-      radius: centroidRadius(width, height),
-    },
+    centroid: { role: 'centroid', center: centroid.pixel },
     neck: neckRect,
     tab: tabRect,
     base: baseRect,

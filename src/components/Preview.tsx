@@ -55,6 +55,14 @@ const Preview3d = lazy(() => import('@/components/preview3d/Preview3d'));
 const CONTOUR_FILL = 'rgba(148, 163, 184, 0.25)';
 const CONTOUR_STROKE = 'rgba(100, 116, 139, 0.8)';
 
+/**
+ * 重心マーカー（赤丸）の半径。線幅と同じく**画面上の px** で与え、描画時に scale で割ることで、
+ * 画像解像度にもズーム率にも依らず常に同じ大きさに見せる（画像 px 基準にすると、同じフィギュアでも
+ * 3000px の画像と 500px の画像とで見かけの大きさが変わってしまう）。大きすぎると形状が隠れるため
+ * 小さめにとる（SPEC「重心マーカーの大きさ」）。
+ */
+const CENTROID_RADIUS_PX = 5;
+
 export interface PreviewProps {
   /** 読み込み済み画像。未読み込みなら null。 */
   image: FigureImage | null;
@@ -345,7 +353,7 @@ export function Preview({
                       <circle
                         cx={overlay.centroid.center.x}
                         cy={overlay.centroid.center.y}
-                        r={overlay.centroid.radius / s}
+                        r={CENTROID_RADIUS_PX / s}
                         fill="rgba(249, 115, 22, 0.85)"
                       />
                     </g>
@@ -418,7 +426,7 @@ export function Preview({
                     <circle
                       cx={overlay.centroid.center.x}
                       cy={overlay.centroid.center.y}
-                      r={overlay.centroid.radius / s}
+                      r={CENTROID_RADIUS_PX / s}
                       fill="rgb(239, 68, 68)"
                       stroke="white"
                       strokeWidth={1.5 / s}
