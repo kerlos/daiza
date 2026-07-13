@@ -21,7 +21,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
-import { minNeckWidthMm, PARAMETER_CONSTRAINTS, PARAMETER_PRESETS } from '@/model/state';
+import {
+  minNeckWidthMm,
+  PARAMETER_CONSTRAINTS,
+  PARAMETER_PRESETS,
+  type ParameterConstraint,
+} from '@/model/state';
 import type { AnalysisParameters } from '@/model/types';
 
 export interface LeftPanelProps {
@@ -42,7 +47,7 @@ interface NumberFieldProps {
   label: string;
   unit: string;
   value: number;
-  constraint: { min: number; max: number; step: number };
+  constraint: ParameterConstraint;
   onValueChange: (value: number) => void;
 }
 
@@ -61,6 +66,7 @@ function UnitNumberInput({
         type="number"
         inputMode="decimal"
         min={constraint.min}
+        // 上限を持たないパラメータ（constraint.max 省略）では max 属性ごと出さず、頭打ちを作らない。
         max={constraint.max}
         step={constraint.step}
         value={value}
@@ -166,8 +172,8 @@ export function LeftPanel({ parameters, onParametersChange, onImageFile }: LeftP
   const alphaThreshold = PARAMETER_CONSTRAINTS.alphaThreshold;
   // 首部幅の下限は差込口幅に連動する（肩が消えないための不変条件）。入力側でも下限を
   // 差込口幅へ追従させ、そもそも制約を割る値を入れられないようにする（状態側の
-  // normalizeParameters が最終的な番人）。
-  const neckWidth = {
+  // normalizeParameters が最終的な番人）。上限は持たない（PARAMETER_CONSTRAINTS 参照）。
+  const neckWidth: ParameterConstraint = {
     ...PARAMETER_CONSTRAINTS.neckWidthMm,
     min: minNeckWidthMm(parameters.slotWidthMm),
   };

@@ -70,7 +70,7 @@ const ERROR_MESSAGES: Record<PipelineErrorKind, string> = {
   scaleCalculationFailed:
     'フィギュア高さが小さすぎます。フィギュア高さは「接地面（台座底面）からカットライン（絵柄＋余白）の上端まで」の全高です。カットライン余白×2＋アクリル板の持ち上げ量＋板厚 より大きい値を指定してください。',
   slotPlacementFailed:
-    '差込部（首部・ツメ）を配置できません。差込口オフセットを小さくする、首部幅を差込口幅より大きくする、などパラメータを見直してください。',
+    '差込部（首部・ツメ）を配置できません。首部の左右端が板からはみ出している可能性があります。首部幅を小さくする、差込口オフセットを小さくする、などパラメータを見直してください。',
   baseCalculationFailed:
     '台座サイズを計算できません。指定した台座幅では重心を支えられない、または指定した台座奥行にスリット（幅=板厚）が収まらない可能性があります。台座幅・台座奥行を広げる、差込口オフセット（左右・前後）を小さくする、などパラメータを見直してください。',
 };
@@ -323,7 +323,8 @@ function buildSlottedCutline(
     : null;
   // 首部の crisp 合成には矩形ではなく neckFill（下辺の弧に沿う多角形）を使う。矩形だと
   // 板の下辺が首部幅の範囲内で大きく上下する形状で、板の輪郭の外へ張り出してしまう。
-  const merged = (filled && unionSlotRects(filled, slot, neckFill)) ?? attachSlotBody(contour, slot);
+  const merged =
+    (filled && unionSlotRects(filled, slot, neckFill)) ?? attachSlotBody(contour, slot);
 
   if (memo) {
     memo.mergedKey = key;
