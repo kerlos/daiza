@@ -5,10 +5,16 @@
 // コンポーネントであり、状態は保持しない。値と変更ハンドラはすべて props で
 // 受け取り、解析・状態更新は上位（App / useAnalysis, TODO 13）へ委ねる。
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 
 import { ImagePlus, Shapes } from 'lucide-react';
 
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -29,6 +35,13 @@ import {
   type ParameterConstraint,
 } from '@/model/state';
 import type { AnalysisParameters, BaseShape, BaseShapeSource } from '@/model/types';
+
+/**
+ * パラメータのカテゴリ（アコーディオンのセクション）。パラメータは十数個あり
+ * 平坦に並べると目的の項目を探しづらいため、「どの部品を決める値か」で束ねる。
+ * 既定はすべて開いた状態（初見で全項目が見えることを優先し、折りたたみは任意）。
+ */
+const PARAMETER_SECTIONS = ['acrylic', 'slot', 'neck', 'base'] as const;
 
 /** 台座形状の選択肢（UI の表示順・ラベル）。既定は矩形。 */
 const BASE_SHAPE_OPTIONS: readonly { value: BaseShape; label: string }[] = [
@@ -182,6 +195,26 @@ function PresetNumberField({
   );
 }
 
+/** パラメータのカテゴリ 1 つ。見出しと、その配下のフィールド群の縦並びを束ねる。 */
+function ParameterSection({
+  value,
+  title,
+  children,
+}: {
+  value: (typeof PARAMETER_SECTIONS)[number];
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <AccordionItem value={value}>
+      {/* 見出しの上下・最終フィールドと区切り線の間を既定より広げ、隣接カテゴリの
+          フィールドどうしが地続きに見えないようにする（境目をはっきりさせる）。 */}
+      <AccordionTrigger className="py-5">{title}</AccordionTrigger>
+      <AccordionContent className="grid gap-4 pb-7">{children}</AccordionContent>
+    </AccordionItem>
+  );
+}
+
 export function LeftPanel({
   parameters,
   onParametersChange,
@@ -257,259 +290,277 @@ export function LeftPanel({
         <CardHeader>
           <CardTitle>パラメータ</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4">
-          {/* 不透明領域の判定そのものを決める最上流のパラメータなので先頭に置く。 */}
-          <div className="grid gap-1.5">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="alpha-threshold">アルファ閾値</Label>
-              {/* 0=既定（α>0 をすべて不透明）を明示するため現在値を併記する。 */}
-              <span className="text-muted-foreground text-sm tabular-nums">
-                {parameters.alphaThreshold.toFixed(2)}
-              </span>
-            </div>
-            <Slider
-              id="alpha-threshold"
-              min={alphaThreshold.min}
-              max={alphaThreshold.max}
-              step={alphaThreshold.step}
-              value={[parameters.alphaThreshold]}
-              onValueChange={([next]) => {
-                if (next !== undefined) {
-                  // スライダーの内部計算で 0.30000000000000004 のような値が出るため、
-                  // step の桁（0.01）へ丸めてから状態・解析メモの鍵に載せる。
-                  onParametersChange({ alphaThreshold: Math.round(next * 100) / 100 });
-                }
-              }}
-            />
-          </div>
+        <CardContent>
+          {/* 決める部品ごとにカテゴリへ束ねる（type="multiple" ＝ 複数同時に開ける）。
+              既定値ですべて開いておくので、折りたたみは「今いじらない分類を畳む」任意操作。 */}
+          <Accordion type="multiple" defaultValue={[...PARAMETER_SECTIONS]}>
+            {/* アクリル板：不透明判定・スケール・カットラインの形そのものを決める段。 */}
+            <ParameterSection value="acrylic" title="アクリル板">
+              {/* 不透明領域の判定そのものを決める最上流のパラメータなので先頭に置く。 */}
+              <div className="grid gap-1.5">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="alpha-threshold">アルファ閾値</Label>
+                  {/* 0=既定（α>0 をすべて不透明）を明示するため現在値を併記する。 */}
+                  <span className="text-muted-foreground text-sm tabular-nums">
+                    {parameters.alphaThreshold.toFixed(2)}
+                  </span>
+                </div>
+                <Slider
+                  id="alpha-threshold"
+                  min={alphaThreshold.min}
+                  max={alphaThreshold.max}
+                  step={alphaThreshold.step}
+                  value={[parameters.alphaThreshold]}
+                  onValueChange={([next]) => {
+                    if (next !== undefined) {
+                      // スライダーの内部計算で 0.30000000000000004 のような値が出るため、
+                      // step の桁（0.01）へ丸めてから状態・解析メモの鍵に載せる。
+                      onParametersChange({ alphaThreshold: Math.round(next * 100) / 100 });
+                    }
+                  }}
+                />
+              </div>
 
-          <NumberField
-            id="figure-height"
-            label="フィギュア高さ"
-            unit="mm"
-            value={parameters.figureHeightMm}
-            constraint={PARAMETER_CONSTRAINTS.figureHeightMm}
-            onValueChange={(figureHeightMm) => onParametersChange({ figureHeightMm })}
-          />
-          <PresetNumberField
-            id="thickness"
-            label="板厚"
-            unit="mm"
-            value={parameters.thicknessMm}
-            presets={PARAMETER_PRESETS.thicknessMm}
-            constraint={PARAMETER_CONSTRAINTS.thicknessMm}
-            onValueChange={(thicknessMm) => onParametersChange({ thicknessMm })}
-          />
-          <NumberField
-            id="cutline-margin"
-            label="カットライン余白"
-            unit="mm"
-            value={parameters.cutLineMarginMm}
-            constraint={PARAMETER_CONSTRAINTS.cutLineMarginMm}
-            onValueChange={(cutLineMarginMm) => onParametersChange({ cutLineMarginMm })}
-          />
-
-          <div className="grid gap-1.5">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="cutline-smoothing">カットライン平滑化</Label>
-              {/* 平滑化は整数の強さ。0=無効を明示するため現在値を併記する。 */}
-              <span className="text-muted-foreground text-sm tabular-nums">
-                {parameters.cutLineSmoothing}
-              </span>
-            </div>
-            <Slider
-              id="cutline-smoothing"
-              min={smoothing.min}
-              max={smoothing.max}
-              step={smoothing.step}
-              value={[parameters.cutLineSmoothing]}
-              onValueChange={([cutLineSmoothing]) => {
-                if (cutLineSmoothing !== undefined) {
-                  onParametersChange({ cutLineSmoothing });
-                }
-              }}
-            />
-          </div>
-
-          {/* 0 は隙間埋め無効。閾値より狭い隙間だけがアクリルで充填される。 */}
-          <NumberField
-            id="gap-fill-threshold"
-            label="隙間埋め閾値（0=無効）"
-            unit="mm"
-            value={parameters.gapFillThresholdMm}
-            constraint={PARAMETER_CONSTRAINTS.gapFillThresholdMm}
-            onValueChange={(gapFillThresholdMm) => onParametersChange({ gapFillThresholdMm })}
-          />
-
-          <NumberField
-            id="min-bridge-width"
-            label="パーツ連結部の最小幅"
-            unit="mm"
-            value={parameters.minBridgeWidthMm}
-            constraint={PARAMETER_CONSTRAINTS.minBridgeWidthMm}
-            onValueChange={(minBridgeWidthMm) => onParametersChange({ minBridgeWidthMm })}
-          />
-
-          <NumberField
-            id="slot-width"
-            label="差込口幅"
-            unit="mm"
-            value={parameters.slotWidthMm}
-            constraint={PARAMETER_CONSTRAINTS.slotWidthMm}
-            onValueChange={(slotWidthMm) => onParametersChange({ slotWidthMm })}
-          />
-          <NumberField
-            id="slot-offset"
-            label="差込口オフセット（正=右／負=左）"
-            unit="mm"
-            value={parameters.slotOffsetMm}
-            constraint={PARAMETER_CONSTRAINTS.slotOffsetMm}
-            onValueChange={(slotOffsetMm) => onParametersChange({ slotOffsetMm })}
-          />
-          <NumberField
-            id="slot-depth-offset"
-            label="差込口の前後オフセット（正=前／負=後）"
-            unit="mm"
-            value={parameters.slotDepthOffsetMm}
-            constraint={PARAMETER_CONSTRAINTS.slotDepthOffsetMm}
-            onValueChange={(slotDepthOffsetMm) => onParametersChange({ slotDepthOffsetMm })}
-          />
-          <NumberField
-            id="neck-width"
-            label={`首部幅（下限 ${neckWidth.min}mm）`}
-            unit="mm"
-            value={parameters.neckWidthMm}
-            constraint={neckWidth}
-            onValueChange={(neckWidthMm) => onParametersChange({ neckWidthMm })}
-          />
-          <NumberField
-            id="plate-lift"
-            label="アクリル板の持ち上げ量"
-            unit="mm"
-            value={parameters.plateLiftMm}
-            constraint={PARAMETER_CONSTRAINTS.plateLiftMm}
-            onValueChange={(plateLiftMm) => onParametersChange({ plateLiftMm })}
-          />
-
-          {/* 台座形状。表示のみの切替ではなく解析パラメータであり、成立検査・転倒角・
-              プレビュー・3D・エクスポートのすべてが選んだ形状に追従する（SPEC「台座形状」）。 */}
-          <div className="grid gap-1.5">
-            <Label htmlFor="base-shape">台座形状</Label>
-            <Select
-              value={shape}
-              onValueChange={(next) => onParametersChange({ baseShape: next as BaseShape })}
-            >
-              <SelectTrigger id="base-shape" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {BASE_SHAPE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* 任意形状のソース。プレビューへのドラッグ＆ドロップはフィギュア画像に予約済みなので、
-              ここではファイル選択のみを提供する（SPEC「台座形状ソース」）。 */}
-          {shape === 'custom' && (
-            <div className="grid gap-1.5">
-              <Label>台座形状ソース</Label>
-              <input
-                ref={baseShapeFileRef}
-                type="file"
-                accept="image/png,image/svg+xml,.png,.svg"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) {
-                    onBaseShapeFile?.(file);
-                  }
-                  // 同じファイルを選び直しても change が発火するよう選択状態を空へ戻す。
-                  event.target.value = '';
-                }}
+              <NumberField
+                id="figure-height"
+                label="フィギュア高さ"
+                unit="mm"
+                value={parameters.figureHeightMm}
+                constraint={PARAMETER_CONSTRAINTS.figureHeightMm}
+                onValueChange={(figureHeightMm) => onParametersChange({ figureHeightMm })}
               />
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!onBaseShapeFile}
-                onClick={() => baseShapeFileRef.current?.click()}
-              >
-                <Shapes />
-                PNG / SVG を読み込む
-              </Button>
-              <p className="text-muted-foreground truncate text-xs">
-                {baseShapeSource
-                  ? baseShapeSource.fileName
-                  : '未読込（読み込むまで台座を計算できません）'}
-              </p>
-            </div>
-          )}
+              <PresetNumberField
+                id="thickness"
+                label="板厚"
+                unit="mm"
+                value={parameters.thicknessMm}
+                presets={PARAMETER_PRESETS.thicknessMm}
+                constraint={PARAMETER_CONSTRAINTS.thicknessMm}
+                onValueChange={(thicknessMm) => onParametersChange({ thicknessMm })}
+              />
+              <NumberField
+                id="cutline-margin"
+                label="カットライン余白"
+                unit="mm"
+                value={parameters.cutLineMarginMm}
+                constraint={PARAMETER_CONSTRAINTS.cutLineMarginMm}
+                onValueChange={(cutLineMarginMm) => onParametersChange({ cutLineMarginMm })}
+              />
 
-          {usesWidthDepth && (
-            <NumberField
-              id="base-width"
-              label={shape === 'ellipse' ? '台座幅（左右径）' : '台座幅'}
-              unit="mm"
-              value={parameters.baseWidthMm}
-              constraint={PARAMETER_CONSTRAINTS.baseWidthMm}
-              onValueChange={(baseWidthMm) => onParametersChange({ baseWidthMm })}
-            />
-          )}
-          {usesWidthDepth && (
-            <NumberField
-              id="base-depth"
-              label={shape === 'ellipse' ? '台座奥行（前後径）' : '台座奥行'}
-              unit="mm"
-              value={parameters.baseDepthMm}
-              constraint={PARAMETER_CONSTRAINTS.baseDepthMm}
-              onValueChange={(baseDepthMm) => onParametersChange({ baseDepthMm })}
-            />
-          )}
-          {shape === 'roundedRect' && (
-            <NumberField
-              id="base-corner-radius"
-              label={`角丸半径（上限 ${cornerRadius.max}mm）`}
-              unit="mm"
-              value={parameters.baseCornerRadiusMm}
-              constraint={cornerRadius}
-              onValueChange={(baseCornerRadiusMm) => onParametersChange({ baseCornerRadiusMm })}
-            />
-          )}
-          {usesDiameter && (
-            <NumberField
-              id="base-diameter"
-              label={shape === 'polygon' ? '台座直径（外接円）' : '台座直径'}
-              unit="mm"
-              value={parameters.baseDiameterMm}
-              constraint={PARAMETER_CONSTRAINTS.baseDiameterMm}
-              onValueChange={(baseDiameterMm) => onParametersChange({ baseDiameterMm })}
-            />
-          )}
-          {shape === 'polygon' && (
-            <NumberField
-              id="base-polygon-sides"
-              label="辺数"
-              unit=""
-              value={parameters.basePolygonSides}
-              constraint={PARAMETER_CONSTRAINTS.basePolygonSides}
-              onValueChange={(basePolygonSides) => onParametersChange({ basePolygonSides })}
-            />
-          )}
-          {shape === 'polygon' && (
-            <NumberField
-              id="base-polygon-rotation"
-              label="回転角（0=前に辺が正対）"
-              unit="°"
-              value={parameters.basePolygonRotationDeg}
-              constraint={PARAMETER_CONSTRAINTS.basePolygonRotationDeg}
-              onValueChange={(basePolygonRotationDeg) =>
-                onParametersChange({ basePolygonRotationDeg })
-              }
-            />
-          )}
+              <div className="grid gap-1.5">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="cutline-smoothing">カットライン平滑化</Label>
+                  {/* 平滑化は整数の強さ。0=無効を明示するため現在値を併記する。 */}
+                  <span className="text-muted-foreground text-sm tabular-nums">
+                    {parameters.cutLineSmoothing}
+                  </span>
+                </div>
+                <Slider
+                  id="cutline-smoothing"
+                  min={smoothing.min}
+                  max={smoothing.max}
+                  step={smoothing.step}
+                  value={[parameters.cutLineSmoothing]}
+                  onValueChange={([cutLineSmoothing]) => {
+                    if (cutLineSmoothing !== undefined) {
+                      onParametersChange({ cutLineSmoothing });
+                    }
+                  }}
+                />
+              </div>
+
+              {/* 0 は隙間埋め無効。閾値より狭い隙間だけがアクリルで充填される。 */}
+              <NumberField
+                id="gap-fill-threshold"
+                label="隙間埋め閾値（0=無効）"
+                unit="mm"
+                value={parameters.gapFillThresholdMm}
+                constraint={PARAMETER_CONSTRAINTS.gapFillThresholdMm}
+                onValueChange={(gapFillThresholdMm) => onParametersChange({ gapFillThresholdMm })}
+              />
+
+              <NumberField
+                id="min-bridge-width"
+                label="パーツ連結部の最小幅"
+                unit="mm"
+                value={parameters.minBridgeWidthMm}
+                constraint={PARAMETER_CONSTRAINTS.minBridgeWidthMm}
+                onValueChange={(minBridgeWidthMm) => onParametersChange({ minBridgeWidthMm })}
+              />
+            </ParameterSection>
+
+            {/* 差込口：台座スリットへ挿す「ツメ」の寸法と位置。 */}
+            <ParameterSection value="slot" title="差込口">
+              <NumberField
+                id="slot-width"
+                label="差込口幅"
+                unit="mm"
+                value={parameters.slotWidthMm}
+                constraint={PARAMETER_CONSTRAINTS.slotWidthMm}
+                onValueChange={(slotWidthMm) => onParametersChange({ slotWidthMm })}
+              />
+              <NumberField
+                id="slot-offset"
+                label="差込口オフセット（正=右／負=左）"
+                unit="mm"
+                value={parameters.slotOffsetMm}
+                constraint={PARAMETER_CONSTRAINTS.slotOffsetMm}
+                onValueChange={(slotOffsetMm) => onParametersChange({ slotOffsetMm })}
+              />
+              <NumberField
+                id="slot-depth-offset"
+                label="差込口の前後オフセット（正=前／負=後）"
+                unit="mm"
+                value={parameters.slotDepthOffsetMm}
+                constraint={PARAMETER_CONSTRAINTS.slotDepthOffsetMm}
+                onValueChange={(slotDepthOffsetMm) => onParametersChange({ slotDepthOffsetMm })}
+              />
+            </ParameterSection>
+
+            {/* 首部：板と台座上面の間を埋める段。持ち上げ量は板の浮き＝首部の高さそのものなので
+                （台座上面 Y = カットライン最下端 + 持ち上げ量）、アクリル板ではなくここに置く。 */}
+            <ParameterSection value="neck" title="首部">
+              <NumberField
+                id="neck-width"
+                label={`首部幅（下限 ${neckWidth.min}mm）`}
+                unit="mm"
+                value={parameters.neckWidthMm}
+                constraint={neckWidth}
+                onValueChange={(neckWidthMm) => onParametersChange({ neckWidthMm })}
+              />
+              <NumberField
+                id="plate-lift"
+                label="アクリル板の持ち上げ量"
+                unit="mm"
+                value={parameters.plateLiftMm}
+                constraint={PARAMETER_CONSTRAINTS.plateLiftMm}
+                onValueChange={(plateLiftMm) => onParametersChange({ plateLiftMm })}
+              />
+            </ParameterSection>
+
+            {/* 台座：形状とその寸法。 */}
+            <ParameterSection value="base" title="台座">
+              {/* 台座形状。表示のみの切替ではなく解析パラメータであり、成立検査・転倒角・
+                  プレビュー・3D・エクスポートのすべてが選んだ形状に追従する（SPEC「台座形状」）。 */}
+              <div className="grid gap-1.5">
+                <Label htmlFor="base-shape">台座形状</Label>
+                <Select
+                  value={shape}
+                  onValueChange={(next) => onParametersChange({ baseShape: next as BaseShape })}
+                >
+                  <SelectTrigger id="base-shape" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BASE_SHAPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* 任意形状のソース。プレビューへのドラッグ＆ドロップはフィギュア画像に予約済みなので、
+                  ここではファイル選択のみを提供する（SPEC「台座形状ソース」）。 */}
+              {shape === 'custom' && (
+                <div className="grid gap-1.5">
+                  <Label>台座形状ソース</Label>
+                  <input
+                    ref={baseShapeFileRef}
+                    type="file"
+                    accept="image/png,image/svg+xml,.png,.svg"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        onBaseShapeFile?.(file);
+                      }
+                      // 同じファイルを選び直しても change が発火するよう選択状態を空へ戻す。
+                      event.target.value = '';
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!onBaseShapeFile}
+                    onClick={() => baseShapeFileRef.current?.click()}
+                  >
+                    <Shapes />
+                    PNG / SVG を読み込む
+                  </Button>
+                  <p className="text-muted-foreground truncate text-xs">
+                    {baseShapeSource
+                      ? baseShapeSource.fileName
+                      : '未読込（読み込むまで台座を計算できません）'}
+                  </p>
+                </div>
+              )}
+
+              {usesWidthDepth && (
+                <NumberField
+                  id="base-width"
+                  label={shape === 'ellipse' ? '台座幅（左右径）' : '台座幅'}
+                  unit="mm"
+                  value={parameters.baseWidthMm}
+                  constraint={PARAMETER_CONSTRAINTS.baseWidthMm}
+                  onValueChange={(baseWidthMm) => onParametersChange({ baseWidthMm })}
+                />
+              )}
+              {usesWidthDepth && (
+                <NumberField
+                  id="base-depth"
+                  label={shape === 'ellipse' ? '台座奥行（前後径）' : '台座奥行'}
+                  unit="mm"
+                  value={parameters.baseDepthMm}
+                  constraint={PARAMETER_CONSTRAINTS.baseDepthMm}
+                  onValueChange={(baseDepthMm) => onParametersChange({ baseDepthMm })}
+                />
+              )}
+              {shape === 'roundedRect' && (
+                <NumberField
+                  id="base-corner-radius"
+                  label={`角丸半径（上限 ${cornerRadius.max}mm）`}
+                  unit="mm"
+                  value={parameters.baseCornerRadiusMm}
+                  constraint={cornerRadius}
+                  onValueChange={(baseCornerRadiusMm) => onParametersChange({ baseCornerRadiusMm })}
+                />
+              )}
+              {usesDiameter && (
+                <NumberField
+                  id="base-diameter"
+                  label={shape === 'polygon' ? '台座直径（外接円）' : '台座直径'}
+                  unit="mm"
+                  value={parameters.baseDiameterMm}
+                  constraint={PARAMETER_CONSTRAINTS.baseDiameterMm}
+                  onValueChange={(baseDiameterMm) => onParametersChange({ baseDiameterMm })}
+                />
+              )}
+              {shape === 'polygon' && (
+                <NumberField
+                  id="base-polygon-sides"
+                  label="辺数"
+                  unit=""
+                  value={parameters.basePolygonSides}
+                  constraint={PARAMETER_CONSTRAINTS.basePolygonSides}
+                  onValueChange={(basePolygonSides) => onParametersChange({ basePolygonSides })}
+                />
+              )}
+              {shape === 'polygon' && (
+                <NumberField
+                  id="base-polygon-rotation"
+                  label="回転角（0=前に辺が正対）"
+                  unit="°"
+                  value={parameters.basePolygonRotationDeg}
+                  constraint={PARAMETER_CONSTRAINTS.basePolygonRotationDeg}
+                  onValueChange={(basePolygonRotationDeg) =>
+                    onParametersChange({ basePolygonRotationDeg })
+                  }
+                />
+              )}
+            </ParameterSection>
+          </Accordion>
         </CardContent>
       </Card>
     </div>
