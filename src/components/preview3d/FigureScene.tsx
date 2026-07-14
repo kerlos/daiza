@@ -9,15 +9,16 @@
 //   環境 …… 床（テクスチャ・実寸グリッド。components/preview3d/Floor）+ 接地影
 //            + ソフトな環境光（スタジオ風）
 //
-// 傾け（転倒シミュレーション）は、台座の支持端エッジを支点にした 2 段の group 回転で表す。
-// 分解アニメーションは板だけを +Y へ動かす group で表す。どちらも解析結果には触れない
-// 表示専用の変形であり、ジオメトリは作り直さない。
+// 傾け（転倒シミュレーション）は、台座 footprint 凸包の支持直線（＝床に触れている接触辺・接触点）を
+// 軸にした 1 段の group 回転で表す（姿勢の計算は render/tilt3d）。分解アニメーションは板だけを
+// +Y へ動かす group で表す。どちらも解析結果には触れない表示専用の変形であり、ジオメトリは
+// 作り直さない。
 
 import { useEffect, useMemo, useRef, type ComponentRef, type ReactNode } from 'react';
 
 import { ContactShadows, Environment, Lightformer, Line, OrbitControls } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
-import { DoubleSide, FrontSide, type Group } from 'three';
+import { DoubleSide, FrontSide, Quaternion, Vector3, type Group } from 'three';
 
 import { Floor } from '@/components/preview3d/Floor';
 import {
@@ -27,7 +28,7 @@ import {
 } from '@/components/preview3d/geometry3d';
 import type { Scene3dCamera, Scene3dGeometry } from '@/render/scene3d';
 import type { ArtworkTextures } from '@/render/texture3d';
-import { degToRad } from '@/utils/geometry';
+import { tiltPose } from '@/render/tilt3d';
 
 /** 背景の色。商品写真のスタジオを模した無彩色（SPEC「背景は単色」）。 */
 const BACKGROUND_COLOR = '#e8ecf1';
@@ -56,10 +57,10 @@ export interface FigureSceneProps {
   textures: ArtworkTextures;
   /** 印刷レイヤを切り抜く alphaTest のしきい値（render/texture3d の inkAlphaTest）。 */
   inkAlphaTest: number;
-  /** 左右の傾き(度)。負 = 左へ／正 = 右へ。 */
-  tiltLeftRightDeg: number;
-  /** 前後の傾き(度)。負 = 後ろへ／正 = 前へ。 */
-  tiltFrontBackDeg: number;
+  /** 傾ける方向の方位角(度)。右 0°・前 90°・左 180°・後 270°。 */
+  tiltAzimuthDeg: number;
+  /** その方位へ倒す量(度)。0 で直立。 */
+  tiltDeg: number;
   /** 分解（板を持ち上げて台座から抜く）状態か。 */
   exploded: boolean;
   /** 台座を強めの半透明にするか（スリット内のツメの収まりを透かして見る）。 */
@@ -76,15 +77,15 @@ export function FigureScene({
   geometry,
   textures,
   inkAlphaTest,
-  tiltLeftRightDeg,
-  tiltFrontBackDeg,
+  tiltAzimuthDeg,
+  tiltDeg,
   exploded,
   translucentBase,
   floorImage,
   floorGrid,
   resetToken,
 }: FigureSceneProps) {
-  const { plate, base, artwork, tipping, explodeLiftMm, camera } = geometry;
+  const { plate, base, artwork, tilt, explodeLiftMm, camera } = geometry;
   const controlsRef = useRef<ComponentRef<typeof OrbitControls> | null>(null);
 
   // ジオメトリ・テクスチャは解析結果／画像が変わったときだけ作り直す（SPEC の性能要件）。
@@ -101,16 +102,16 @@ export function FigureScene({
   // 板の裏面（奥）の Z。印刷レイヤはここからさらに奥へ 2 枚重ねる。
   const plateBackZ = plate.centerZMm - plate.thicknessMm / 2;
 
-  // 支点は「倒れる側」の底辺エッジ。台座形状が矩形以外でも、転倒角（支持関数）が見ているのと
-  // 同じ凸包の支持端に取る（矩形では ±幅/2・±奥行/2 と一致する）。
-  const pivotX = tiltLeftRightDeg >= 0 ? base.support.maxXMm : base.support.minXMm;
-  const pivotZ = tiltFrontBackDeg >= 0 ? base.support.maxZMm : base.support.minZMm;
-
-  // その向きの転倒角を超えたか（＝この角度では倒れる）。支点ハイライトを警告色にする。
-  const lrLimitDeg = tiltLeftRightDeg >= 0 ? tipping.rightDeg : tipping.leftDeg;
-  const fbLimitDeg = tiltFrontBackDeg >= 0 ? tipping.frontDeg : tipping.backDeg;
-  const lrFalling = Math.abs(tiltLeftRightDeg) > lrLimitDeg;
-  const fbFalling = Math.abs(tiltFrontBackDeg) > fbLimitDeg;
+  // 傾けの姿勢（支点・回転軸・その方位の転倒角）。支点は凸包の支持直線＝実際に床へ触れている
+  // 接触辺・接触点なので、円・楕円を斜めへ倒しても台座が浮かない（render/tilt3d）。
+  const pose = useMemo(
+    () => tiltPose(tilt, tiltAzimuthDeg, tiltDeg),
+    [tilt, tiltAzimuthDeg, tiltDeg],
+  );
+  const quaternion = useMemo(
+    () => new Quaternion().setFromAxisAngle(new Vector3(...pose.axis), pose.angleRad),
+    [pose],
+  );
 
   const shadowScaleMm = Math.max(base.widthMm, base.depthMm) * 2.6;
 
@@ -142,94 +143,76 @@ export function FigureScene({
         color="#1e293b"
       />
 
-      {/* 傾け：外側 = 左右（Z 軸まわり）、内側 = 前後（X 軸まわり）。いずれも支点エッジへ
-          原点を移してから回し、元へ戻す（＝エッジを軸にした回転）。右へ倒す（正）とき、
-          上部が +X へ動くのは Z 軸まわりの**負**の回転。 */}
-      <group position={[pivotX, 0, 0]} rotation={[0, 0, -degToRad(tiltLeftRightDeg)]}>
-        <group position={[-pivotX, 0, 0]}>
-          <group position={[0, 0, pivotZ]} rotation={[degToRad(tiltFrontBackDeg), 0, 0]}>
-            <group position={[0, 0, -pivotZ]}>
-              {/* 台座。半透明トグル時のみ transmission をやめた素直なアルファ合成にして、
-                  スリット内のツメが背後に透けて見えるようにする。 */}
-              <mesh geometry={baseGeometry} rotation={[-Math.PI / 2, 0, 0]}>
-                {translucentBase ? (
-                  <meshPhysicalMaterial
-                    color="#cfe3f5"
-                    transparent
-                    opacity={0.28}
-                    depthWrite={false}
-                    roughness={0.12}
-                    metalness={0}
-                    ior={1.49}
-                    envMapIntensity={0.8}
-                  />
-                ) : (
-                  <AcrylicMaterial thicknessMm={base.thicknessMm} />
-                )}
-              </mesh>
+      {/* 傾け：支持直線（支点）へ原点を移してから、その直線を軸に回し、元へ戻す。軸は方位に
+          応じて斜めを向くためオイラー角では表せず、軸角からクォータニオンを作る。 */}
+      <group position={[...pose.pivot]} quaternion={quaternion}>
+        <group position={[-pose.pivot[0], 0, -pose.pivot[2]]}>
+          {/* 台座。半透明トグル時のみ transmission をやめた素直なアルファ合成にして、
+              スリット内のツメが背後に透けて見えるようにする。 */}
+          <mesh geometry={baseGeometry} rotation={[-Math.PI / 2, 0, 0]}>
+            {translucentBase ? (
+              <meshPhysicalMaterial
+                color="#cfe3f5"
+                transparent
+                opacity={0.28}
+                depthWrite={false}
+                roughness={0.12}
+                metalness={0}
+                ior={1.49}
+                envMapIntensity={0.8}
+              />
+            ) : (
+              <AcrylicMaterial thicknessMm={base.thicknessMm} />
+            )}
+          </mesh>
 
-              {/* アクリル板 + 印刷レイヤ。分解時はこの group ごと上へ抜ける。 */}
-              <ExplodeGroup liftMm={explodeLiftMm} exploded={exploded}>
-                <mesh geometry={plateGeometry} position={[0, 0, plateBackZ]}>
-                  <AcrylicMaterial thicknessMm={plate.thicknessMm} />
-                </mesh>
+          {/* アクリル板 + 印刷レイヤ。分解時はこの group ごと上へ抜ける。 */}
+          <ExplodeGroup liftMm={explodeLiftMm} exploded={exploded}>
+            <mesh geometry={plateGeometry} position={[0, 0, plateBackZ]}>
+              <AcrylicMaterial thicknessMm={plate.thicknessMm} />
+            </mesh>
 
-                {/* 絵柄（白版と合成済み）：板の裏面のすぐ奥。前から見るとアクリル越しに
-                    見え、後ろからは白版に隠れる（＝表面のみ描画）。
-                    半透明ではなく alphaTest で切り抜くのは、アクリルの透過（transmission）が
-                    背景バッファへ不透明オブジェクトしか描かないため（render/texture3d 参照）。 */}
-                <mesh position={[artwork.centerX, artwork.centerY, plateBackZ - INK_GAP_MM]}>
-                  <planeGeometry args={[artwork.width, artwork.height]} />
-                  <meshStandardMaterial
-                    map={artworkTexture}
-                    alphaTest={inkAlphaTest}
-                    alphaToCoverage
-                    side={FrontSide}
-                    roughness={0.9}
-                    metalness={0}
-                  />
-                </mesh>
+            {/* 絵柄（白版と合成済み）：板の裏面のすぐ奥。前から見るとアクリル越しに
+                見え、後ろからは白版に隠れる（＝表面のみ描画）。
+                半透明ではなく alphaTest で切り抜くのは、アクリルの透過（transmission）が
+                背景バッファへ不透明オブジェクトしか描かないため（render/texture3d 参照）。 */}
+            <mesh position={[artwork.centerX, artwork.centerY, plateBackZ - INK_GAP_MM]}>
+              <planeGeometry args={[artwork.width, artwork.height]} />
+              <meshStandardMaterial
+                map={artworkTexture}
+                alphaTest={inkAlphaTest}
+                alphaToCoverage
+                side={FrontSide}
+                roughness={0.9}
+                metalness={0}
+              />
+            </mesh>
 
-                {/* 白版：絵柄のさらに奥。不透明領域だけを白で覆い、後ろから見ると
-                    これが直接見える（絵柄は表面のみなので裏からは映らない）。 */}
-                <mesh position={[artwork.centerX, artwork.centerY, plateBackZ - INK_GAP_MM * 2]}>
-                  <planeGeometry args={[artwork.width, artwork.height]} />
-                  <meshStandardMaterial
-                    map={whiteTexture}
-                    alphaTest={inkAlphaTest}
-                    alphaToCoverage
-                    side={DoubleSide}
-                    color="#ffffff"
-                    roughness={0.9}
-                    metalness={0}
-                  />
-                </mesh>
-              </ExplodeGroup>
+            {/* 白版：絵柄のさらに奥。不透明領域だけを白で覆い、後ろから見ると
+                これが直接見える（絵柄は表面のみなので裏からは映らない）。 */}
+            <mesh position={[artwork.centerX, artwork.centerY, plateBackZ - INK_GAP_MM * 2]}>
+              <planeGeometry args={[artwork.width, artwork.height]} />
+              <meshStandardMaterial
+                map={whiteTexture}
+                alphaTest={inkAlphaTest}
+                alphaToCoverage
+                side={DoubleSide}
+                color="#ffffff"
+                roughness={0.9}
+                metalness={0}
+              />
+            </mesh>
+          </ExplodeGroup>
 
-              {/* 支点エッジのハイライト。ガイドは常時出さず、傾けているときだけ見せる
-                  （完成プレビューと同じ「素の見た目を邪魔しない」思想。SPEC）。 */}
-              {tiltLeftRightDeg !== 0 && (
-                <Line
-                  points={[
-                    [pivotX, 0, base.support.minZMm],
-                    [pivotX, 0, base.support.maxZMm],
-                  ]}
-                  color={lrFalling ? PIVOT_FALLING_COLOR : PIVOT_SAFE_COLOR}
-                  lineWidth={3}
-                />
-              )}
-              {tiltFrontBackDeg !== 0 && (
-                <Line
-                  points={[
-                    [base.support.minXMm, 0, pivotZ],
-                    [base.support.maxXMm, 0, pivotZ],
-                  ]}
-                  color={fbFalling ? PIVOT_FALLING_COLOR : PIVOT_SAFE_COLOR}
-                  lineWidth={3}
-                />
-              )}
-            </group>
-          </group>
+          {/* 支点のハイライト（接触辺、または接触点での接線）。ガイドは常時出さず、傾けている
+              ときだけ見せる（完成プレビューと同じ「素の見た目を邪魔しない」思想。SPEC）。 */}
+          {tiltDeg !== 0 && (
+            <Line
+              points={[[...pose.edge[0]], [...pose.edge[1]]]}
+              color={pose.falling ? PIVOT_FALLING_COLOR : PIVOT_SAFE_COLOR}
+              lineWidth={3}
+            />
+          )}
         </group>
       </group>
 

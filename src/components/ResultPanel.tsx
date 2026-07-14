@@ -10,6 +10,7 @@ import { RECOMMENDED_DPI } from '@/analysis/scale';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AnalysisResult, BaseShape } from '@/model/types';
+import { formatAzimuth } from '@/utils/azimuth';
 
 export interface ResultPanelProps {
   /** 直近の解析結果。未解析・失敗時は null。 */
@@ -28,19 +29,6 @@ const BASE_SHAPE_LABELS: Record<BaseShape, string> = {
   polygon: '正多角形',
   custom: '任意形状',
 };
-
-/** 8 方位のラベル。方位角は右 0°・前 90°・左 180°・後 270°（SPEC「最小転倒角」）。 */
-const AZIMUTH_LABELS = ['右', '右前', '前', '左前', '左', '左後', '後', '右後'] as const;
-
-/**
- * 方位角(度)を「135°（左前）」の形へ整える。
- * 45° 刻みの 8 方位へ最近傍で丸めた目安ラベルを添える（正確な角度は数値で示す）。
- */
-function formatAzimuth(azimuthDeg: number): string {
-  const normalized = ((azimuthDeg % 360) + 360) % 360;
-  const index = Math.round(normalized / 45) % 8;
-  return `${normalized.toFixed(0)}°（${AZIMUTH_LABELS[index]}）`;
-}
 
 /** 結果一覧の 1 行分（項目名と表示値）。 */
 interface ResultRow {

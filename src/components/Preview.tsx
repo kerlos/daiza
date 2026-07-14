@@ -32,7 +32,7 @@ import {
   Minus,
   PersonStanding,
   Plus,
-  SquareDashed,
+  RectangleHorizontal,
 } from 'lucide-react';
 
 import { Grid } from '@/components/Grid';
@@ -547,7 +547,7 @@ export function Preview({
                   aria-label="上面図"
                   aria-pressed={showTopView}
                 >
-                  <SquareDashed />
+                  <RectangleHorizontal />
                 </Button>
                 {/* 実寸グリッド表示切替。実寸(mm)の格子なのでスケール（mm/px）が要る。 */}
                 <Button

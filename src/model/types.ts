@@ -355,6 +355,11 @@ export interface BaseResult {
  * 矩形では従来式（左右は台座幅、前後は台座奥行と前後オフセット）と厳密に一致する。
  */
 export interface StabilityResult {
+  /**
+   * 台座上面（接地面）から測った重心の高さ(mm)。転倒角の分母であり、方向によらず一定。
+   * 3D の傾け（任意方位の転倒角）が同じ式を再導出せずに済むよう、結果として持たせる。
+   */
+  centroidHeightMm: number;
   /** 左方向へ倒れる際の転倒角(度)。 */
   tippingAngleLeftDeg: number;
   /** 右方向へ倒れる際の転倒角(度)。 */

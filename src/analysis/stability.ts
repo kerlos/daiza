@@ -25,8 +25,13 @@ import { centroidProjection } from '@/analysis/base';
 import type { BaseResult, Centroid, Point, SlotResult, StabilityResult } from '@/model/types';
 import { radToDeg } from '@/utils/geometry';
 
-/** 単位方向 d に対する凸包の支持関数 h(d) = max ⟨v, d⟩。 */
-function supportValue(hull: readonly Point[], dx: number, dy: number): number {
+/**
+ * 単位方向 d に対する凸包の支持関数 h(d) = max ⟨v, d⟩。
+ *
+ * 3D の傾け（render/tilt3d）は h(d) の位置に支点（支持直線）を置く。転倒角と同じ関数を使わないと
+ * 支点と警告色の境界がずれるため、ここを唯一の定義として共有する。
+ */
+export function supportValue(hull: readonly Point[], dx: number, dy: number): number {
   let best = Number.NEGATIVE_INFINITY;
   for (const v of hull) {
     const value = v.x * dx + v.y * dy;
@@ -38,12 +43,12 @@ function supportValue(hull: readonly Point[], dx: number, dy: number): number {
 }
 
 /** 方向 d へ倒すときの支持端距離（＝ h(d) − ⟨g, d⟩）。負値は 0 へ丸めない（検査の破れを隠さない）。 */
-function supportDistance(hull: readonly Point[], g: Point, dx: number, dy: number): number {
+export function supportDistance(hull: readonly Point[], g: Point, dx: number, dy: number): number {
   return supportValue(hull, dx, dy) - (g.x * dx + g.y * dy);
 }
 
 /** θ = atan(支持端距離 / 重心高さ) を度で返す。SPEC の定義そのもの。 */
-function tippingAngleDeg(distanceMm: number, heightMm: number): number {
+export function tippingAngleDeg(distanceMm: number, heightMm: number): number {
   return radToDeg(Math.atan(distanceMm / heightMm));
 }
 
@@ -148,6 +153,7 @@ export function computeStability(
   }
 
   return {
+    centroidHeightMm,
     tippingAngleLeftDeg: tippingAngleDeg(supportDistance(hull, g, -1, 0), centroidHeightMm),
     tippingAngleRightDeg: tippingAngleDeg(supportDistance(hull, g, 1, 0), centroidHeightMm),
     tippingAngleFrontDeg: tippingAngleDeg(supportDistance(hull, g, 0, 1), centroidHeightMm),
