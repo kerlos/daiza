@@ -14,7 +14,7 @@
 import { useMemo, useRef, useState } from 'react';
 
 import { Canvas } from '@react-three/fiber';
-import { Blend, Crosshair, Grid3x3, Layers } from 'lucide-react';
+import { Blend, Crosshair, Grid3x3, Layers2 } from 'lucide-react';
 
 import { FigureScene } from '@/components/preview3d/FigureScene';
 import { useFloorTexture } from '@/components/preview3d/useFloorTexture';
@@ -24,6 +24,8 @@ import { cn } from '@/lib/utils';
 import type { AnalysisResult, FigureImage } from '@/model/types';
 import { CAMERA_FOV_DEG, buildScene3d } from '@/render/scene3d';
 import { buildArtworkTextures, inkAlphaTest } from '@/render/texture3d';
+import { tiltLimitDeg } from '@/render/tilt3d';
+import { formatAzimuth, normalizeAzimuth } from '@/utils/azimuth';
 import { clamp } from '@/utils/geometry';
 
 /**
@@ -31,6 +33,12 @@ import { clamp } from '@/utils/geometry';
  * 見られないため、少し超えて倒れ込むところまで動かせるようにする（SPEC「転倒角 + 余裕」）。
  */
 const TILT_MARGIN_DEG = 10;
+
+/** 方向スライダーが吸着する角度の許容差(度)。この範囲に入ったら候補角へスナップする。 */
+const AZIMUTH_SNAP_TOLERANCE_DEG = 3;
+
+/** スナップ先の基本方位（45° 刻みの 8 方位）。ここに最悪方位を足したものが候補になる。 */
+const AZIMUTH_SNAP_TARGETS = [0, 45, 90, 135, 180, 225, 270, 315];
 
 /** カメラのクリップ面(mm)。板厚(数 mm)へ寄っても破綻せず、床の端まで映る範囲。 */
 const CAMERA_NEAR_MM = 1;
@@ -53,8 +61,10 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
     [image.bitmap, alphaThreshold],
   );
 
-  const [tiltLeftRightDeg, setTiltLeftRightDeg] = useState(0);
-  const [tiltFrontBackDeg, setTiltFrontBackDeg] = useState(0);
+  // 傾けは「どちらへ（方位角）」「どれだけ（傾き量）」の 2 値で持つ。斜め方向でも支点と
+  // 転倒角が一意に決まる表現であり、最悪方位（最小転倒角）もそのまま再現できる。
+  const [tiltAzimuthDeg, setTiltAzimuthDeg] = useState(0);
+  const [tiltDeg, setTiltDeg] = useState(0);
   const [exploded, setExploded] = useState(false);
   const [translucentBase, setTranslucentBase] = useState(false);
   const [resetToken, setResetToken] = useState(0);
@@ -64,32 +74,35 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
   const floor = useFloorTexture();
   const floorFileRef = useRef<HTMLInputElement>(null);
 
-  const { tipping } = geometry;
+  const { tilt } = geometry;
 
-  // 可動域は方向ごとの転倒角 + 余裕。パラメータ変更で転倒角が縮むと現在値が域外になり得る
-  // ため、描画・スライダーの双方でクランプ後の値を使う（state は次操作で上書きされる）。
-  const leftRightRange = {
-    min: -(tipping.leftDeg + TILT_MARGIN_DEG),
-    max: tipping.rightDeg + TILT_MARGIN_DEG,
+  // その方位の転倒角。可動域（転倒角 + 余裕）と警告表示の境界になる。方向を変えると変わる。
+  const limitDeg = tiltLimitDeg(tilt, tiltAzimuthDeg);
+  // パラメータ変更や方向の変更で転倒角が縮むと現在値が域外になり得るため、描画・スライダーの
+  // 双方でクランプ後の値を使う（state 自体は次の操作で上書きされる）。
+  const tiltMaxDeg = limitDeg + TILT_MARGIN_DEG;
+  const tiltAmountDeg = clamp(tiltDeg, 0, tiltMaxDeg);
+  const tilted = tiltAmountDeg !== 0;
+
+  // 方向スライダーのスナップ先。8 方位に加えて最悪方位（最小転倒角の向き）へも吸着させる。
+  const snapTargets = useMemo(
+    () => [...AZIMUTH_SNAP_TARGETS, normalizeAzimuth(tilt.worstAzimuthDeg)],
+    [tilt.worstAzimuthDeg],
+  );
+
+  const changeAzimuth = (next: number) => {
+    setTiltAzimuthDeg(snapAzimuth(next, snapTargets));
   };
-  const frontBackRange = {
-    min: -(tipping.backDeg + TILT_MARGIN_DEG),
-    max: tipping.frontDeg + TILT_MARGIN_DEG,
-  };
-  const tiltLeftRight = clamp(tiltLeftRightDeg, leftRightRange.min, leftRightRange.max);
-  const tiltFrontBack = clamp(tiltFrontBackDeg, frontBackRange.min, frontBackRange.max);
-  const tilted = tiltLeftRight !== 0 || tiltFrontBack !== 0;
 
   // 分解／組立は「傾き 0」の姿勢で再生する（合成姿勢を作らない。SPEC）。
   const toggleExploded = () => {
-    setTiltLeftRightDeg(0);
-    setTiltFrontBackDeg(0);
+    setTiltDeg(0);
     setExploded((v) => !v);
   };
 
+  // 方向は保持したまま量だけ 0 へ戻す（同じ方位で倒し直せるようにする）。
   const resetTilt = () => {
-    setTiltLeftRightDeg(0);
-    setTiltFrontBackDeg(0);
+    setTiltDeg(0);
   };
 
   return (
@@ -109,8 +122,8 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
           geometry={geometry}
           textures={textures}
           inkAlphaTest={inkAlphaTest(alphaThreshold)}
-          tiltLeftRightDeg={tiltLeftRight}
-          tiltFrontBackDeg={tiltFrontBack}
+          tiltAzimuthDeg={tiltAzimuthDeg}
+          tiltDeg={tiltAmountDeg}
           exploded={exploded}
           translucentBase={translucentBase}
           floorImage={floor.image}
@@ -140,7 +153,7 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
             aria-label={exploded ? '組立' : '分解'}
             aria-pressed={exploded}
           >
-            <Layers />
+            <Layers2 />
           </Button>
           <Button
             variant="ghost"
@@ -165,23 +178,48 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
         </div>
 
         <div className="mt-2 space-y-2">
+          {/* 傾ける方向（方位角）。倒す向きを 1 本で指定するので、斜め方向でも支点と転倒角が
+              一意に決まる。8 方位と最悪方位へスナップする。 */}
+          <div>
+            <div className="flex items-baseline justify-between text-xs">
+              <span className="font-medium">
+                方向
+                <span className="text-muted-foreground ml-1 font-normal">右0° / 前90°</span>
+              </span>
+              <span className="tabular-nums">{formatAzimuth(tiltAzimuthDeg)}</span>
+            </div>
+            <Slider
+              value={[tiltAzimuthDeg]}
+              min={0}
+              max={360}
+              step={1}
+              onValueChange={([next]) => changeAzimuth(next ?? 0)}
+              aria-label="傾ける方向（方位角）"
+              className="mt-1"
+            />
+            <div className="mt-1 flex items-baseline justify-between">
+              <p className="text-muted-foreground text-[11px] tabular-nums">
+                最小転倒角 {tilt.minTippingDeg.toFixed(1)}°（
+                {formatAzimuth(tilt.worstAzimuthDeg)}）
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[11px]"
+                onClick={() => setTiltAzimuthDeg(normalizeAzimuth(tilt.worstAzimuthDeg))}
+              >
+                最悪方位へ
+              </Button>
+            </div>
+          </div>
+
+          {/* 倒す量。可動域はその方位の転倒角 + 余裕（SPEC）。 */}
           <TiltControl
-            label="左右"
-            hint="負=左 / 正=右"
-            value={tiltLeftRight}
-            min={leftRightRange.min}
-            max={leftRightRange.max}
-            limitDeg={tiltLeftRight >= 0 ? tipping.rightDeg : tipping.leftDeg}
-            onChange={setTiltLeftRightDeg}
-          />
-          <TiltControl
-            label="前後"
-            hint="負=後 / 正=前"
-            value={tiltFrontBack}
-            min={frontBackRange.min}
-            max={frontBackRange.max}
-            limitDeg={tiltFrontBack >= 0 ? tipping.frontDeg : tipping.backDeg}
-            onChange={setTiltFrontBackDeg}
+            label="傾き"
+            value={tiltAmountDeg}
+            max={tiltMaxDeg}
+            limitDeg={limitDeg}
+            onChange={setTiltDeg}
           />
         </div>
 
@@ -306,45 +344,57 @@ function FloorStatus({
 }
 
 /**
- * 傾けスライダー 1 本。現在の傾きと、その向きの転倒角までの余裕を併記する。
- * 転倒角を超えたら「転倒」を警告色で示す（3D 側では支点エッジも警告色になる）。
+ * 方位角を候補（8 方位・最悪方位）へ吸着させる。
+ * 候補ちょうどの角度はスライダーの刻み（1°）では踏みにくく、また 359° と 0° は同じ向きなので、
+ * 360° をまたぐ距離で最近傍を測る。
+ */
+function snapAzimuth(azimuthDeg: number, targets: readonly number[]): number {
+  const value = normalizeAzimuth(azimuthDeg);
+  let best = value;
+  let bestDistance = AZIMUTH_SNAP_TOLERANCE_DEG;
+  for (const target of targets) {
+    const diff = Math.abs(normalizeAzimuth(value - target + 180) - 180);
+    if (diff <= bestDistance) {
+      bestDistance = diff;
+      best = target;
+    }
+  }
+  return best;
+}
+
+/**
+ * 傾き量のスライダー。現在の傾きと、その方位の転倒角までの余裕を併記する。
+ * 転倒角を超えたら「転倒」を警告色で示す（3D 側では支点のハイライトも警告色になる）。
  */
 function TiltControl({
   label,
-  hint,
   value,
-  min,
   max,
   limitDeg,
   onChange,
 }: {
   label: string;
-  hint: string;
   value: number;
-  min: number;
   max: number;
   limitDeg: number;
   onChange: (value: number) => void;
 }) {
-  const marginDeg = limitDeg - Math.abs(value);
+  const marginDeg = limitDeg - value;
   const falling = marginDeg < 0;
 
   return (
     <div>
       <div className="flex items-baseline justify-between text-xs">
-        <span className="font-medium">
-          {label}
-          <span className="text-muted-foreground ml-1 font-normal">{hint}</span>
-        </span>
+        <span className="font-medium">{label}</span>
         <span className="tabular-nums">{value.toFixed(1)}°</span>
       </div>
       <Slider
         value={[value]}
-        min={min}
+        min={0}
         max={max}
-        step={0.5}
+        step={0.1}
         onValueChange={([next]) => onChange(next ?? 0)}
-        aria-label={`${label}の傾き`}
+        aria-label={`${label}の量`}
         className="mt-1"
       />
       <p

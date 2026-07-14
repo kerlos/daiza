@@ -20,8 +20,10 @@
 //   ・台座上面が Y = 板厚
 // が構成的に成り立つ。
 
+import { centroidProjection } from '@/analysis/base';
 import { slotJunctionCorners } from '@/analysis/slot';
 import type { AnalysisResult, Point } from '@/model/types';
+import type { Tilt3dModel } from '@/render/tilt3d';
 import { closedCurvePolyline } from '@/utils/curve';
 import { degToRad } from '@/utils/geometry';
 
@@ -70,26 +72,24 @@ export interface Scene3dPlate {
   readonly maxXMm: number;
 }
 
-/** 台座（幅 × 奥行の板に、スリットを貫通穴として開けたもの）。 */
+/** 台座（footprint を板厚ぶん押し出し、スリットを貫通穴として開けたもの）。 */
 export interface Scene3dBase {
+  /**
+   * footprint の外形（折れ線、台座ローカル座標 mm）。x = 右正、y = **前正**（＝シーンの Z）。
+   * 押し出しは this を水平面へ寝かせて行う（components/preview3d/geometry3d）。
+   */
+  readonly outline: readonly Point[];
+  /** footprint のバウンディングボックス寸法(mm)。カメラ構図・影の大きさに使う。 */
   readonly widthMm: number;
   readonly depthMm: number;
   /** 台座の厚み(mm)。板厚と同じ（ツメ深さ = 板厚 = 台座厚でツライチになる）。 */
   readonly thicknessMm: number;
-  /** 貫通スリット。幅 = 差込口幅、奥行方向の開口 = 板厚、中心 = 奥行中心 + 前後オフセット。 */
+  /** 貫通スリット。幅 = 差込口幅、奥行方向の開口 = 板厚、中心 = 奥行原点 + 前後オフセット。 */
   readonly slot: {
     readonly widthMm: number;
     readonly openingMm: number;
     readonly centerZMm: number;
   };
-}
-
-/** 各方向の転倒角(度)。傾けスライダーの可動域と警告色の境界になる。 */
-export interface Scene3dTipping {
-  readonly leftDeg: number;
-  readonly rightDeg: number;
-  readonly frontDeg: number;
-  readonly backDeg: number;
 }
 
 /** 初期構図（＝視点リセットの戻り先）。 */
@@ -104,7 +104,8 @@ export interface Scene3dGeometry {
   readonly base: Scene3dBase;
   /** 絵柄（と白版）を板の裏面へ貼る矩形。画像全体を実寸で置いたもの。 */
   readonly artwork: Scene3dRect;
-  readonly tipping: Scene3dTipping;
+  /** 傾け（転倒シミュレーション）の姿勢を任意方位について求めるためのモデル。 */
+  readonly tilt: Tilt3dModel;
   /** 分解アニメーションで板を持ち上げる高さ(mm)。 */
   readonly explodeLiftMm: number;
   readonly camera: Scene3dCamera;
@@ -121,7 +122,7 @@ export interface Scene3dGeometry {
  * 持たないが、板厚は差込部にそのまま現れているため、この 1 引数で自己完結できる。
  */
 export function buildScene3d(result: AnalysisResult): Scene3dGeometry {
-  const { mmPerPixel, imageSize, contour, slot, base, stability } = result;
+  const { mmPerPixel, imageSize, contour, centroid, slot, base, stability } = result;
 
   // 板厚。板・台座・ツメ深さで共通の値（SPEC）。
   const thicknessMm = slot.tabDepthMm;
@@ -166,6 +167,9 @@ export function buildScene3d(result: AnalysisResult): Scene3dGeometry {
   return {
     plate,
     base: {
+      // 台座は「台座形状」で選んだ footprint（解析が確定済み）をそのまま押し出す。折れ線は
+      // 許容誤差 0.05mm で平坦化済みなので、3D 側で曲線を刻み直す必要はない。
+      outline: base.footprint.polyline,
       widthMm: base.widthMm,
       depthMm: base.depthMm,
       thicknessMm,
@@ -181,15 +185,41 @@ export function buildScene3d(result: AnalysisResult): Scene3dGeometry {
       width: imageWidthMm,
       height: imageHeightMm,
     },
-    tipping: {
-      leftDeg: stability.tippingAngleLeftDeg,
-      rightDeg: stability.tippingAngleRightDeg,
-      frontDeg: stability.tippingAngleFrontDeg,
-      backDeg: stability.tippingAngleBackDeg,
+    tilt: {
+      // 支点・転倒角はどちらも凸包の支持関数で決まる（render/tilt3d）。重心の鉛直投影は
+      // 転倒角と同じ定義を使わないと支点と警告色の境界がずれるため、analysis/base から取る。
+      hull: hullOf(base),
+      groundCentroid: centroidProjection(centroid, slot),
+      centroidHeightMm: stability.centroidHeightMm,
+      spanMm: Math.max(base.widthMm, base.depthMm),
+      minTippingDeg: stability.tippingAngleMinDeg,
+      worstAzimuthDeg: stability.worstAzimuthDeg,
     },
     explodeLiftMm: explodeLift(thicknessMm, topYMm),
     camera: cameraFrame(plate, base.widthMm),
   };
+}
+
+/**
+ * 傾けの支持範囲に使う凸包。
+ *
+ * 通常は footprint の凸包そのもの。頂点が 3 未満に退化した凸包は解析（computeStability）が
+ * 弾いており 3D まで来ないが、支持関数が定義できず支点が消えるため、念のため bbox の矩形へ
+ * 落として姿勢だけは成り立たせる。
+ */
+function hullOf(base: AnalysisResult['base']): readonly Point[] {
+  const hull = base.footprint.hull;
+  if (hull.length >= 3) {
+    return hull;
+  }
+  const hw = base.widthMm / 2;
+  const hd = base.depthMm / 2;
+  return [
+    { x: hw, y: -hd },
+    { x: hw, y: hd },
+    { x: -hw, y: hd },
+    { x: -hw, y: -hd },
+  ];
 }
 
 /**
