@@ -109,13 +109,11 @@ export function generateMockup2dPng(
     silhouette.rect(baseLeft + originX, baseTop + originY, baseWidthPixel, baseHeightPixel);
   }
   if (holeCenterPixel) {
-    silhouette.arc(
-      holeCenterPixel.x + originX,
-      holeCenterPixel.y + originY,
-      holeRadiusPixel,
-      0,
-      Math.PI * 2,
-    );
+    const hx = holeCenterPixel.x + originX;
+    const hy = holeCenterPixel.y + originY;
+    // 既存の輪郭パスから線を引かないよう、穴は新しいサブパスとして始める。
+    silhouette.moveTo(hx + holeRadiusPixel, hy);
+    silhouette.arc(hx, hy, holeRadiusPixel, 0, Math.PI * 2);
   }
 
   ctx.save();
@@ -150,13 +148,10 @@ export function generateMockup2dPng(
   const platePath = new Path2D();
   buildPath(platePath, smoothContour, originX, originY);
   if (holeCenterPixel) {
-    platePath.arc(
-      holeCenterPixel.x + originX,
-      holeCenterPixel.y + originY,
-      holeRadiusPixel,
-      0,
-      Math.PI * 2,
-    );
+    const hx = holeCenterPixel.x + originX;
+    const hy = holeCenterPixel.y + originY;
+    platePath.moveTo(hx + holeRadiusPixel, hy);
+    platePath.arc(hx, hy, holeRadiusPixel, 0, Math.PI * 2);
   }
 
   ctx.save();
