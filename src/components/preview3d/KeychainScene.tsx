@@ -211,16 +211,16 @@ export function KeychainScene({
               <mesh
                 key={i}
                 position={[0, y, 0]}
-                rotation={i % 2 === 0 ? [Math.PI / 2, 0, 0] : [0, Math.PI / 2, 0]}
+                rotation={[Math.PI / 2, Math.PI / 2, 0]}
               >
-                <torusGeometry args={[linkRadius, linkTube, 8, 24]} />
+                <torusGeometry args={[linkRadius, linkTube, 8, 124]} />
                 <primitive object={metalMaterial} attach="material" />
               </mesh>
             );
           })}
 
           {/* キーリング（板の穴に通る）。 */}
-          <mesh position={[0, ringCenterY, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <mesh position={[0, ringCenterY, 0]} rotation={[Math.PI / 2, Math.PI / 2, 0]}>
             <torusGeometry args={[ringRadiusMm, 0.5, 10, 32]} />
             <primitive object={metalMaterial} attach="material" />
           </mesh>
