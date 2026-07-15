@@ -5,7 +5,7 @@
 // コンポーネントであり、状態は保持しない。値と変更ハンドラはすべて props で
 // 受け取り、解析・状態更新は上位（App / useAnalysis, TODO 13）へ委ねる。
 
-import { useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { ImagePlus, Shapes } from 'lucide-react';
 
@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
+import { useTranslation } from '@/locales';
 import {
   maxCornerRadiusMm,
   minNeckWidthMm,
@@ -42,16 +43,6 @@ import type { AnalysisParameters, BaseShape, BaseShapeSource } from '@/model/typ
  * 既定はすべて開いた状態（初見で全項目が見えることを優先し、折りたたみは任意）。
  */
 const PARAMETER_SECTIONS = ['acrylic', 'slot', 'neck', 'base'] as const;
-
-/** 台座形状の選択肢（UI の表示順・ラベル）。既定は矩形。 */
-const BASE_SHAPE_OPTIONS: readonly { value: BaseShape; label: string }[] = [
-  { value: 'rect', label: '矩形' },
-  { value: 'roundedRect', label: '角丸矩形' },
-  { value: 'circle', label: '円形' },
-  { value: 'ellipse', label: '楕円' },
-  { value: 'polygon', label: '正多角形' },
-  { value: 'custom', label: '任意形状（PNG / SVG）' },
-];
 
 export interface LeftPanelProps {
   /** 現在のパラメータ値。 */
@@ -147,6 +138,8 @@ function PresetNumberField({
   constraint,
   onValueChange,
 }: PresetNumberFieldProps) {
+  const { t } = useTranslation();
+
   // 現在値がプリセットに無ければカスタム入力とみなす。ユーザーが明示的に「カスタム」を
   // 選んだ状態も保持したいため、選択状態は value から毎回導出せずローカルに持つ。
   const [isCustom, setIsCustom] = useState(() => !presets.includes(value));
@@ -178,7 +171,7 @@ function PresetNumberField({
               {unit}
             </SelectItem>
           ))}
-          <SelectItem value={CUSTOM_OPTION}>カスタム…</SelectItem>
+          <SelectItem value={CUSTOM_OPTION}>{t('leftPanel.custom')}</SelectItem>
         </SelectContent>
       </Select>
       {/* カスタム選択時のみ数値入力欄を表示する。 */}
@@ -222,6 +215,21 @@ export function LeftPanel({
   baseShapeSource,
   onBaseShapeFile,
 }: LeftPanelProps) {
+  const { t } = useTranslation();
+
+  /** 台座形状の選択肢（UI の表示順・ラベル）。既定は矩形。 */
+  const baseShapeOptions = useMemo<readonly { value: BaseShape; label: string }[]>(
+    () => [
+      { value: 'rect', label: t('baseShape.rect') },
+      { value: 'roundedRect', label: t('baseShape.roundedRect') },
+      { value: 'circle', label: t('baseShape.circle') },
+      { value: 'ellipse', label: t('baseShape.ellipse') },
+      { value: 'polygon', label: t('baseShape.polygon') },
+      { value: 'custom', label: t('baseShape.custom') },
+    ],
+    [t],
+  );
+
   const smoothing = PARAMETER_CONSTRAINTS.cutLineSmoothing;
   const alphaThreshold = PARAMETER_CONSTRAINTS.alphaThreshold;
   // 首部幅の下限は差込口幅に連動する（肩が消えないための不変条件）。入力側でも下限を
@@ -256,7 +264,7 @@ export function LeftPanel({
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader>
-          <CardTitle>画像</CardTitle>
+          <CardTitle>{t('leftPanel.imageCardTitle')}</CardTitle>
         </CardHeader>
         <CardContent>
           <input
@@ -281,25 +289,25 @@ export function LeftPanel({
             onClick={() => fileInputRef.current?.click()}
           >
             <ImagePlus />
-            PNGを読み込む
+            {t('leftPanel.loadImage')}
           </Button>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>パラメータ</CardTitle>
+          <CardTitle>{t('leftPanel.parametersCardTitle')}</CardTitle>
         </CardHeader>
         <CardContent>
           {/* 決める部品ごとにカテゴリへ束ねる（type="multiple" ＝ 複数同時に開ける）。
               既定値ですべて開いておくので、折りたたみは「今いじらない分類を畳む」任意操作。 */}
           <Accordion type="multiple" defaultValue={[...PARAMETER_SECTIONS]}>
             {/* アクリル板：不透明判定・スケール・カットラインの形そのものを決める段。 */}
-            <ParameterSection value="acrylic" title="アクリル板">
+            <ParameterSection value="acrylic" title={t('leftPanel.section.acrylic')}>
               {/* 不透明領域の判定そのものを決める最上流のパラメータなので先頭に置く。 */}
               <div className="grid gap-1.5">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="alpha-threshold">アルファ閾値</Label>
+                  <Label htmlFor="alpha-threshold">{t('leftPanel.alphaThreshold')}</Label>
                   {/* 0=既定（α>0 をすべて不透明）を明示するため現在値を併記する。 */}
                   <span className="text-muted-foreground text-sm tabular-nums">
                     {parameters.alphaThreshold.toFixed(2)}
@@ -323,7 +331,7 @@ export function LeftPanel({
 
               <NumberField
                 id="figure-height"
-                label="フィギュア高さ"
+                label={t('leftPanel.figureHeight')}
                 unit="mm"
                 value={parameters.figureHeightMm}
                 constraint={PARAMETER_CONSTRAINTS.figureHeightMm}
@@ -331,7 +339,7 @@ export function LeftPanel({
               />
               <PresetNumberField
                 id="thickness"
-                label="板厚"
+                label={t('leftPanel.thickness')}
                 unit="mm"
                 value={parameters.thicknessMm}
                 presets={PARAMETER_PRESETS.thicknessMm}
@@ -340,7 +348,7 @@ export function LeftPanel({
               />
               <NumberField
                 id="cutline-margin"
-                label="カットライン余白"
+                label={t('leftPanel.cutLineMargin')}
                 unit="mm"
                 value={parameters.cutLineMarginMm}
                 constraint={PARAMETER_CONSTRAINTS.cutLineMarginMm}
@@ -349,7 +357,7 @@ export function LeftPanel({
 
               <div className="grid gap-1.5">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="cutline-smoothing">カットライン平滑化</Label>
+                  <Label htmlFor="cutline-smoothing">{t('leftPanel.cutLineSmoothing')}</Label>
                   {/* 平滑化は整数の強さ。0=無効を明示するため現在値を併記する。 */}
                   <span className="text-muted-foreground text-sm tabular-nums">
                     {parameters.cutLineSmoothing}
@@ -372,7 +380,7 @@ export function LeftPanel({
               {/* 0 は隙間埋め無効。閾値より狭い隙間だけがアクリルで充填される。 */}
               <NumberField
                 id="gap-fill-threshold"
-                label="隙間埋め閾値（0=無効）"
+                label={t('leftPanel.gapFillThreshold')}
                 unit="mm"
                 value={parameters.gapFillThresholdMm}
                 constraint={PARAMETER_CONSTRAINTS.gapFillThresholdMm}
@@ -381,7 +389,7 @@ export function LeftPanel({
 
               <NumberField
                 id="min-bridge-width"
-                label="パーツ連結部の最小幅"
+                label={t('leftPanel.minBridgeWidth')}
                 unit="mm"
                 value={parameters.minBridgeWidthMm}
                 constraint={PARAMETER_CONSTRAINTS.minBridgeWidthMm}
@@ -390,10 +398,10 @@ export function LeftPanel({
             </ParameterSection>
 
             {/* 差込口：台座スリットへ挿す「ツメ」の寸法と位置。 */}
-            <ParameterSection value="slot" title="差込口">
+            <ParameterSection value="slot" title={t('leftPanel.section.slot')}>
               <NumberField
                 id="slot-width"
-                label="差込口幅"
+                label={t('leftPanel.slotWidth')}
                 unit="mm"
                 value={parameters.slotWidthMm}
                 constraint={PARAMETER_CONSTRAINTS.slotWidthMm}
@@ -401,7 +409,7 @@ export function LeftPanel({
               />
               <NumberField
                 id="slot-offset"
-                label="差込口オフセット（正=右／負=左）"
+                label={t('leftPanel.slotOffset')}
                 unit="mm"
                 value={parameters.slotOffsetMm}
                 constraint={PARAMETER_CONSTRAINTS.slotOffsetMm}
@@ -409,7 +417,7 @@ export function LeftPanel({
               />
               <NumberField
                 id="slot-depth-offset"
-                label="差込口の前後オフセット（正=前／負=後）"
+                label={t('leftPanel.slotDepthOffset')}
                 unit="mm"
                 value={parameters.slotDepthOffsetMm}
                 constraint={PARAMETER_CONSTRAINTS.slotDepthOffsetMm}
@@ -419,10 +427,10 @@ export function LeftPanel({
 
             {/* 首部：板と台座上面の間を埋める段。持ち上げ量は板の浮き＝首部の高さそのものなので
                 （台座上面 Y = カットライン最下端 + 持ち上げ量）、アクリル板ではなくここに置く。 */}
-            <ParameterSection value="neck" title="首部">
+            <ParameterSection value="neck" title={t('leftPanel.section.neck')}>
               <NumberField
                 id="neck-width"
-                label={`首部幅（下限 ${neckWidth.min}mm）`}
+                label={t('leftPanel.neckWidth', { min: neckWidth.min })}
                 unit="mm"
                 value={parameters.neckWidthMm}
                 constraint={neckWidth}
@@ -430,7 +438,7 @@ export function LeftPanel({
               />
               <NumberField
                 id="plate-lift"
-                label="アクリル板の持ち上げ量"
+                label={t('leftPanel.plateLift')}
                 unit="mm"
                 value={parameters.plateLiftMm}
                 constraint={PARAMETER_CONSTRAINTS.plateLiftMm}
@@ -439,11 +447,11 @@ export function LeftPanel({
             </ParameterSection>
 
             {/* 台座：形状とその寸法。 */}
-            <ParameterSection value="base" title="台座">
+            <ParameterSection value="base" title={t('leftPanel.section.base')}>
               {/* 台座形状。表示のみの切替ではなく解析パラメータであり、成立検査・転倒角・
                   プレビュー・3D・エクスポートのすべてが選んだ形状に追従する（SPEC「台座形状」）。 */}
               <div className="grid gap-1.5">
-                <Label htmlFor="base-shape">台座形状</Label>
+                <Label htmlFor="base-shape">{t('leftPanel.baseShape')}</Label>
                 <Select
                   value={shape}
                   onValueChange={(next) => onParametersChange({ baseShape: next as BaseShape })}
@@ -452,7 +460,7 @@ export function LeftPanel({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {BASE_SHAPE_OPTIONS.map((option) => (
+                    {baseShapeOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {option.label}
                       </SelectItem>
@@ -465,7 +473,7 @@ export function LeftPanel({
                   ここではファイル選択のみを提供する（SPEC「台座形状ソース」）。 */}
               {shape === 'custom' && (
                 <div className="grid gap-1.5">
-                  <Label>台座形状ソース</Label>
+                  <Label>{t('leftPanel.baseShapeSource')}</Label>
                   <input
                     ref={baseShapeFileRef}
                     type="file"
@@ -487,12 +495,10 @@ export function LeftPanel({
                     onClick={() => baseShapeFileRef.current?.click()}
                   >
                     <Shapes />
-                    PNG / SVG を読み込む
+                    {t('leftPanel.loadBaseShapeSource')}
                   </Button>
                   <p className="text-muted-foreground truncate text-xs">
-                    {baseShapeSource
-                      ? baseShapeSource.fileName
-                      : '未読込（読み込むまで台座を計算できません）'}
+                    {baseShapeSource ? baseShapeSource.fileName : t('leftPanel.baseShapeNotLoaded')}
                   </p>
                 </div>
               )}
@@ -500,7 +506,9 @@ export function LeftPanel({
               {usesWidthDepth && (
                 <NumberField
                   id="base-width"
-                  label={shape === 'ellipse' ? '台座幅（左右径）' : '台座幅'}
+                  label={t(
+                    shape === 'ellipse' ? 'leftPanel.baseWidthEllipse' : 'leftPanel.baseWidth',
+                  )}
                   unit="mm"
                   value={parameters.baseWidthMm}
                   constraint={PARAMETER_CONSTRAINTS.baseWidthMm}
@@ -510,7 +518,9 @@ export function LeftPanel({
               {usesWidthDepth && (
                 <NumberField
                   id="base-depth"
-                  label={shape === 'ellipse' ? '台座奥行（前後径）' : '台座奥行'}
+                  label={t(
+                    shape === 'ellipse' ? 'leftPanel.baseDepthEllipse' : 'leftPanel.baseDepth',
+                  )}
                   unit="mm"
                   value={parameters.baseDepthMm}
                   constraint={PARAMETER_CONSTRAINTS.baseDepthMm}
@@ -520,7 +530,7 @@ export function LeftPanel({
               {shape === 'roundedRect' && (
                 <NumberField
                   id="base-corner-radius"
-                  label={`角丸半径（上限 ${cornerRadius.max}mm）`}
+                  label={t('leftPanel.cornerRadius', { max: cornerRadius.max ?? 0 })}
                   unit="mm"
                   value={parameters.baseCornerRadiusMm}
                   constraint={cornerRadius}
@@ -530,7 +540,11 @@ export function LeftPanel({
               {usesDiameter && (
                 <NumberField
                   id="base-diameter"
-                  label={shape === 'polygon' ? '台座直径（外接円）' : '台座直径'}
+                  label={t(
+                    shape === 'polygon'
+                      ? 'leftPanel.baseDiameterPolygon'
+                      : 'leftPanel.baseDiameter',
+                  )}
                   unit="mm"
                   value={parameters.baseDiameterMm}
                   constraint={PARAMETER_CONSTRAINTS.baseDiameterMm}
@@ -540,7 +554,7 @@ export function LeftPanel({
               {shape === 'polygon' && (
                 <NumberField
                   id="base-polygon-sides"
-                  label="辺数"
+                  label={t('leftPanel.polygonSides')}
                   unit=""
                   value={parameters.basePolygonSides}
                   constraint={PARAMETER_CONSTRAINTS.basePolygonSides}
@@ -550,7 +564,7 @@ export function LeftPanel({
               {shape === 'polygon' && (
                 <NumberField
                   id="base-polygon-rotation"
-                  label="回転角（0=前に辺が正対）"
+                  label={t('leftPanel.polygonRotation')}
                   unit="°"
                   value={parameters.basePolygonRotationDeg}
                   constraint={PARAMETER_CONSTRAINTS.basePolygonRotationDeg}

@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { RECOMMENDED_DPI } from '@/analysis/scale';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useTranslation, type TranslationKey } from '@/locales';
 import type { AnalysisResult, BaseShape } from '@/model/types';
 import { formatAzimuth } from '@/utils/azimuth';
 
@@ -20,16 +21,6 @@ export interface ResultPanelProps {
 
 /** 未確定値のプレースホルダ。全項目で共通化して表記を揃える。 */
 const PLACEHOLDER = '—';
-
-/** 台座形状の表示名（LeftPanel のセレクタと同じ語彙を使う）。 */
-const BASE_SHAPE_LABELS: Record<BaseShape, string> = {
-  rect: '矩形',
-  roundedRect: '角丸矩形',
-  circle: '円形',
-  ellipse: '楕円',
-  polygon: '正多角形',
-  custom: '任意形状',
-};
 
 /** 結果一覧の 1 行分（項目名と表示値）。 */
 interface ResultRow {
@@ -42,22 +33,35 @@ interface ResultRow {
   warning?: string;
 }
 
+function baseShapeLabel(
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string,
+  shape: BaseShape,
+): string {
+  if (shape === 'custom') {
+    return t('baseShape.customShort');
+  }
+  return t(`baseShape.${shape}` as TranslationKey);
+}
+
 /**
  * 結果オブジェクトを表示用の行データへ変換する。
  * 表示整形（桁数・単位）はここに集約し、JSX 側は並べるだけにする。
  */
-function buildRows(result: AnalysisResult | null): ResultRow[] {
+function buildRows(
+  result: AnalysisResult | null,
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string,
+): ResultRow[] {
   // 数値の丸めと単位付与を一箇所に集約する。null の場合は必ず PLACEHOLDER。
   const num = (value: number | undefined, unit: string, digits = 1): string =>
     value === undefined ? PLACEHOLDER : `${value.toFixed(digits)} ${unit}`;
 
   return [
     {
-      label: '画像サイズ',
+      label: t('result.imageSize'),
       value: result ? `${result.imageSize.width} × ${result.imageSize.height} px` : PLACEHOLDER,
     },
     {
-      label: '実寸',
+      label: t('result.physicalSize'),
       value: result
         ? `${result.physicalSize.width.toFixed(1)} × ${result.physicalSize.height.toFixed(1)} mm`
         : PLACEHOLDER,
@@ -66,45 +70,48 @@ function buildRows(result: AnalysisResult | null): ResultRow[] {
     // 印刷業界で馴染みのある単位で示す。小数は判断に寄与しないため整数で丸める。
     // 推奨値を下回るときは、印刷すると絵柄が粗くなることに気付けるよう警告を添える。
     {
-      label: '画像解像度',
+      label: t('result.dpi'),
       value: num(result?.dpi, 'dpi', 0),
       // exactOptionalPropertyTypes 下では undefined を直接代入できないため、条件付きで生やす。
       ...(result !== null && result.dpi < RECOMMENDED_DPI
-        ? { warning: `推奨解像度 (${RECOMMENDED_DPI}dpi) を下回っています` }
+        ? { warning: t('result.dpiWarning', { dpi: RECOMMENDED_DPI }) }
         : {}),
     },
     {
-      label: '重心座標',
+      label: t('result.centroid'),
       value: result
         ? `(${result.centroid.mm.x.toFixed(1)}, ${result.centroid.mm.y.toFixed(1)}) mm`
         : PLACEHOLDER,
     },
-    { label: '差込口中心', value: num(result?.slot.centerXMm, 'mm') },
-    { label: '差込口幅', value: num(result?.slot.widthMm, 'mm') },
-    { label: '台座形状', value: result ? BASE_SHAPE_LABELS[result.base.shape] : PLACEHOLDER },
-    // 台座幅・奥行は footprint のバウンディングボックス実寸（円形では直径×直径。SPEC）。
-    { label: '台座幅', value: num(result?.base.widthMm, 'mm') },
-    { label: '台座奥行', value: num(result?.base.depthMm, 'mm') },
+    { label: t('result.slotCenter'), value: num(result?.slot.centerXMm, 'mm') },
+    { label: t('result.slotWidth'), value: num(result?.slot.widthMm, 'mm') },
     {
-      label: '転倒角（左）',
+      label: t('result.baseShape'),
+      value: result ? baseShapeLabel(t, result.base.shape) : PLACEHOLDER,
+    },
+    // 台座幅・奥行は footprint のバウンディングボックス実寸（円形では直径×直径。SPEC）。
+    { label: t('result.baseWidth'), value: num(result?.base.widthMm, 'mm') },
+    { label: t('result.baseDepth'), value: num(result?.base.depthMm, 'mm') },
+    {
+      label: t('result.tippingAngleLeft'),
       value: num(result?.stability.tippingAngleLeftDeg, '°'),
     },
     {
-      label: '転倒角（右）',
+      label: t('result.tippingAngleRight'),
       value: num(result?.stability.tippingAngleRightDeg, '°'),
     },
     {
-      label: '転倒角（前）',
+      label: t('result.tippingAngleFront'),
       value: num(result?.stability.tippingAngleFrontDeg, '°'),
     },
     {
-      label: '転倒角（後）',
+      label: t('result.tippingAngleBack'),
       value: num(result?.stability.tippingAngleBackDeg, '°'),
     },
     // 全方位で最も倒れやすい方向。正多角形・任意形状では斜めになり得るため、4 方向だけでは
     // 見落とす（矩形・円・楕円では 4 方向の最小と一致する）。
     {
-      label: '転倒角（最小）',
+      label: t('result.tippingAngleMin'),
       value: result
         ? `${result.stability.tippingAngleMinDeg.toFixed(1)} ° / ${formatAzimuth(result.stability.worstAzimuthDeg)}`
         : PLACEHOLDER,
@@ -141,12 +148,13 @@ function WarningIndicator({ message }: { message: string }) {
 }
 
 export function ResultPanel({ result }: ResultPanelProps) {
-  const rows = buildRows(result);
+  const { t } = useTranslation();
+  const rows = buildRows(result, t);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>解析結果</CardTitle>
+        <CardTitle>{t('resultPanel.title')}</CardTitle>
       </CardHeader>
       <CardContent>
         {/* 広幅では右列（縦長・幅の狭い1カラム）に置かれるため lg 以上は1列へ戻す。

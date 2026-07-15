@@ -2,7 +2,7 @@
 // 各パネルを配線する。PNG 読み込み（TODO 4）・解析パイプライン（TODO 13）・
 // エクスポート（SVG / Adobe Illustrator）を配線済み。
 
-import { useCallback, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 
 import { loadBaseShapeSource } from '@/analysis/baseShapeSource';
 import { loadPngFile } from '@/analysis/imageLoader';
@@ -18,6 +18,7 @@ import { bitmapToPngBytes, bitmapToPngDataUrl } from '@/export/raster';
 import { generateSvg } from '@/export/svg';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAppState } from '@/hooks/useAppState';
+import { useTranslation } from '@/locales';
 import { toUnexpectedError } from '@/model/errors';
 
 /**
@@ -48,7 +49,12 @@ const LEFT_PANE = { initial: 384, min: 280, max: 560 } as const;
 const RIGHT_PANE = { initial: 320, min: 240, max: 480 } as const;
 
 function App() {
+  const { t } = useTranslation();
   const { state, actions } = useAppState();
+
+  useEffect(() => {
+    document.title = t('app.pageTitle');
+  }, [t]);
 
   // ペイン幅（広幅レイアウト時のみ有効）。CSS 変数として main へ渡し、Tailwind の
   // lg: 修飾子と組み合わせることで、縦積みになる狭幅では幅指定自体を効かせない。
@@ -170,11 +176,9 @@ function App() {
   return (
     <div className="bg-background flex h-svh flex-col">
       <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
-        <h1 className="text-lg font-bold">Daiza</h1>
-        <p className="text-muted-foreground hidden text-sm sm:block">
-          アクリルフィギュア台座設計ツール
-        </p>
-        {/* 右端にプライバシー表明と GitHub リポジトリへの導線を常設する。 */}
+        <h1 className="text-lg font-bold">{t('app.title')}</h1>
+        <p className="text-muted-foreground hidden text-sm sm:block">{t('app.subtitle')}</p>
+        {/* 右端にプライバシー表明・GitHub リポジトリへの導線・言語切替を常設する。 */}
         <HeaderActions />
       </header>
 
@@ -209,7 +213,7 @@ function App() {
           max={LEFT_PANE.max}
           sign={1}
           onWidthChange={setLeftWidth}
-          label="左パネルの幅"
+          label={t('paneResizer.left')}
         />
 
         {/* 中央：プレビュー。残りの幅・高さを使い切る主役の列。狭幅で縦積みになったときに
@@ -235,7 +239,7 @@ function App() {
           max={RIGHT_PANE.max}
           sign={-1}
           onWidthChange={setRightWidth}
-          label="解析結果パネルの幅"
+          label={t('paneResizer.right')}
         />
 
         {/* 右パネル：解析結果と、それを書き出すエクスポート操作。左パネルと同じく

@@ -69,20 +69,6 @@ type PipelineErrorKind = Extract<
   | 'baseCalculationFailed'
 >;
 
-/** UI へ提示するエラーメッセージ（日本語）。 */
-const ERROR_MESSAGES: Record<PipelineErrorKind, string> = {
-  transparentImage:
-    'アクリル領域が見つからないため解析できません。アルファ閾値を下げる、または透明でないPNG画像を選択してください。',
-  scaleCalculationFailed:
-    'フィギュア高さが小さすぎます。フィギュア高さは「接地面（台座底面）からカットライン（絵柄＋余白）の上端まで」の全高です。カットライン余白×2＋アクリル板の持ち上げ量＋板厚 より大きい値を指定してください。',
-  slotPlacementFailed:
-    '差込部（首部・ツメ）を配置できません。首部の左右端が板からはみ出している可能性があります。首部幅を小さくする、差込口オフセットを小さくする、などパラメータを見直してください。',
-  baseShapeFailed:
-    '台座形状が利用できません。任意形状を選んでいる場合は台座形状ソース（PNG / SVG）を読み込んでください。台座の寸法（幅・奥行・直径）が正しいかも確認してください。',
-  baseCalculationFailed:
-    '台座サイズを計算できません。指定した台座では重心を支えられない、またはスリット（幅=差込口幅・開口=板厚）が台座の縁を割っている可能性があります。台座を大きくする、差込口オフセット（左右・前後）を小さくする、などパラメータを見直してください。',
-};
-
 /** 解析の成否。成功なら結果一式、失敗なら型付きエラー。 */
 export type AnalysisOutcome =
   { ok: true; result: AnalysisResult } | { ok: false; error: AnalysisError };
@@ -146,7 +132,7 @@ export interface ImagePixels {
 
 /** 型付きエラーを組み立てる小ヘルパー。 */
 function makeError(kind: PipelineErrorKind): AnalysisError {
-  return { kind, message: ERROR_MESSAGES[kind] };
+  return { kind };
 }
 
 /** エラー結果（第 2 相用）を組み立てる小ヘルパー。 */

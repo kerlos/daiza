@@ -20,6 +20,7 @@ import { FigureScene } from '@/components/preview3d/FigureScene';
 import { useFloorTexture } from '@/components/preview3d/useFloorTexture';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { useTranslation } from '@/locales';
 import { cn } from '@/lib/utils';
 import type { AnalysisResult, FigureImage } from '@/model/types';
 import { CAMERA_FOV_DEG, buildScene3d } from '@/render/scene3d';
@@ -54,6 +55,8 @@ export interface Preview3dProps {
 }
 
 export default function Preview3d({ result, image, alphaThreshold }: Preview3dProps) {
+  const { t } = useTranslation();
+
   // 解析結果・画像が変わったときだけ作り直す（パラメータ変更のたびの再構築は避ける）。
   const geometry = useMemo(() => buildScene3d(result), [result]);
   const textures = useMemo(
@@ -139,8 +142,8 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
             variant="ghost"
             size="icon-sm"
             onClick={() => setResetToken((v) => v + 1)}
-            title="視点リセット"
-            aria-label="視点リセット"
+            title={t('preview3d.resetView')}
+            aria-label={t('preview3d.resetView')}
           >
             <Crosshair />
           </Button>
@@ -149,8 +152,8 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
             size="icon-sm"
             onClick={toggleExploded}
             className={cn(exploded && 'text-primary bg-primary/10')}
-            title={exploded ? '組立' : '分解'}
-            aria-label={exploded ? '組立' : '分解'}
+            title={exploded ? t('preview3d.assemble') : t('preview3d.explode')}
+            aria-label={exploded ? t('preview3d.assemble') : t('preview3d.explode')}
             aria-pressed={exploded}
           >
             <Layers2 />
@@ -160,8 +163,8 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
             size="icon-sm"
             onClick={() => setTranslucentBase((v) => !v)}
             className={cn(translucentBase && 'text-primary bg-primary/10')}
-            title="台座を半透明にする"
-            aria-label="台座を半透明にする"
+            title={t('preview3d.translucentBase')}
+            aria-label={t('preview3d.translucentBase')}
             aria-pressed={translucentBase}
           >
             <Blend />
@@ -173,7 +176,7 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
             onClick={resetTilt}
             disabled={!tilted}
           >
-            傾きを0へ
+            {t('preview3d.resetTilt')}
           </Button>
         </div>
 
@@ -183,8 +186,10 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
           <div>
             <div className="flex items-baseline justify-between text-xs">
               <span className="font-medium">
-                方向
-                <span className="text-muted-foreground ml-1 font-normal">右0° / 前90°</span>
+                {t('preview3d.direction')}
+                <span className="text-muted-foreground ml-1 font-normal">
+                  {t('preview3d.directionHint')}
+                </span>
               </span>
               <span className="tabular-nums">{formatAzimuth(tiltAzimuthDeg)}</span>
             </div>
@@ -199,8 +204,10 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
             />
             <div className="mt-1 flex items-baseline justify-between">
               <p className="text-muted-foreground text-[11px] tabular-nums">
-                最小転倒角 {tilt.minTippingDeg.toFixed(1)}°（
-                {formatAzimuth(tilt.worstAzimuthDeg)}）
+                {t('preview3d.minTippingAngle', {
+                  angle: tilt.minTippingDeg.toFixed(1),
+                  azimuth: formatAzimuth(tilt.worstAzimuthDeg),
+                })}
               </p>
               <Button
                 variant="ghost"
@@ -208,14 +215,13 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
                 className="h-6 px-2 text-[11px]"
                 onClick={() => setTiltAzimuthDeg(normalizeAzimuth(tilt.worstAzimuthDeg))}
               >
-                最悪方位へ
+                {t('preview3d.worstAzimuth')}
               </Button>
             </div>
           </div>
 
           {/* 倒す量。可動域はその方位の転倒角 + 余裕（SPEC）。 */}
           <TiltControl
-            label="傾き"
             value={tiltAmountDeg}
             max={tiltMaxDeg}
             limitDeg={limitDeg}
@@ -237,7 +243,7 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
             >
               <Grid3x3 />
             </Button>
-            <span className="text-muted-foreground text-xs">床</span>
+            <span className="text-muted-foreground text-xs">{t('preview3d.floor')}</span>
 
             {/* テクスチャの出所（既定は「なし」）。「画像…」はファイル選択ダイアログを開く
                 （読み込みは createImageBitmap でブラウザ内完結。外部へは送信しない）。 */}
@@ -245,23 +251,23 @@ export default function Preview3d({ result, image, alphaThreshold }: Preview3dPr
               <FloorSourceButton
                 active={floor.source === 'none'}
                 onClick={floor.clear}
-                title="テクスチャなし（無地の床）"
+                title={t('preview3d.floorNoneTitle')}
               >
-                なし
+                {t('preview3d.floorNone')}
               </FloorSourceButton>
               <FloorSourceButton
                 active={floor.source === 'wood'}
                 onClick={floor.selectWood}
-                title="木目のサンプルテクスチャ"
+                title={t('preview3d.floorWoodTitle')}
               >
-                木目
+                {t('preview3d.floorWood')}
               </FloorSourceButton>
               <FloorSourceButton
                 active={floor.source === 'custom'}
                 onClick={() => floorFileRef.current?.click()}
-                title="画像ファイルを床に貼る"
+                title={t('preview3d.floorCustomTitle')}
               >
-                画像…
+                {t('preview3d.floorCustom')}
               </FloorSourceButton>
             </div>
           </div>
@@ -331,11 +337,14 @@ function FloorStatus({
   loading: boolean;
   name: string | null;
 }) {
+  const { t } = useTranslation();
   if (error) {
     return <p className="text-destructive mt-1 text-[11px]">{error}</p>;
   }
   if (loading) {
-    return <p className="text-muted-foreground mt-1 text-[11px]">テクスチャを読み込み中…</p>;
+    return (
+      <p className="text-muted-foreground mt-1 text-[11px]">{t('preview3d.loadingTexture')}</p>
+    );
   }
   if (name) {
     return <p className="text-muted-foreground mt-1 truncate text-[11px]">{name}</p>;
@@ -367,25 +376,24 @@ function snapAzimuth(azimuthDeg: number, targets: readonly number[]): number {
  * 転倒角を超えたら「転倒」を警告色で示す（3D 側では支点のハイライトも警告色になる）。
  */
 function TiltControl({
-  label,
   value,
   max,
   limitDeg,
   onChange,
 }: {
-  label: string;
   value: number;
   max: number;
   limitDeg: number;
   onChange: (value: number) => void;
 }) {
+  const { t } = useTranslation();
   const marginDeg = limitDeg - value;
   const falling = marginDeg < 0;
 
   return (
     <div>
       <div className="flex items-baseline justify-between text-xs">
-        <span className="font-medium">{label}</span>
+        <span className="font-medium">{t('preview3d.tilt')}</span>
         <span className="tabular-nums">{value.toFixed(1)}°</span>
       </div>
       <Slider
@@ -394,7 +402,7 @@ function TiltControl({
         max={max}
         step={0.1}
         onValueChange={([next]) => onChange(next ?? 0)}
-        aria-label={`${label}の量`}
+        aria-label={t('preview3d.tilt')}
         className="mt-1"
       />
       <p
@@ -404,8 +412,11 @@ function TiltControl({
         )}
       >
         {falling
-          ? `転倒（転倒角 ${limitDeg.toFixed(1)}° を超過）`
-          : `転倒角 ${limitDeg.toFixed(1)}° まで余裕 ${marginDeg.toFixed(1)}°`}
+          ? t('preview3d.tiltFalling', { limit: limitDeg.toFixed(1) })
+          : t('preview3d.tiltMargin', {
+              limit: limitDeg.toFixed(1),
+              margin: marginDeg.toFixed(1),
+            })}
       </p>
     </div>
   );

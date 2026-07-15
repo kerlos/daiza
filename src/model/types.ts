@@ -417,11 +417,13 @@ export type AnalysisErrorKind =
   | 'slotPlacementFailed' // 差込口が配置不可
   | 'baseCalculationFailed' // 台座計算不可（重心が支持範囲外・スリットが台座の縁を割る等）
   | 'baseShapeFailed' // 台座形状が利用できない（任意形状のソース未読込・読込失敗・寸法不正）
+  | 'baseShapeUnsupported' // 台座形状ソースのファイル形式が非対応
+  | 'baseShapeDecodeFailed' // 台座形状ソースのデコード失敗
+  | 'baseShapeEmptyPng' // PNG シルエットから輪郭が抽出できない
+  | 'baseShapeEmptySvg' // SVG から輪郭が抽出できない
   | 'unexpectedError'; // 想定外の例外（バグ等）の受け皿。クラッシュさせず表示する
 
-/** UI へ提示するためのエラー情報。 */
+/** UI へ提示するためのエラー情報。メッセージ文字列は UI 層の翻訳テーブルへ委ねる。 */
 export interface AnalysisError {
   kind: AnalysisErrorKind;
-  /** ユーザー向けの説明文（日本語）。 */
-  message: string;
 }

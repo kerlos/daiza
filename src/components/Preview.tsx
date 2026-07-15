@@ -39,6 +39,7 @@ import { Grid } from '@/components/Grid';
 import { RULER_SIZE_PX, Ruler } from '@/components/Ruler';
 import { TopView } from '@/components/TopView';
 import { Button } from '@/components/ui/button';
+import { useTranslation } from '@/locales';
 import { buildOverlayShapes } from '@/render/overlay';
 import { buildSimulationShapes } from '@/render/simulation';
 import { buildTopViewShapes } from '@/render/topView';
@@ -103,6 +104,8 @@ export function Preview({
   error,
   onImageFile,
 }: PreviewProps) {
+  const { t } = useTranslation();
+
   // ドラッグ中はドロップ可能であることを視覚的に示すためのフラグ。
   const [isDragOver, setIsDragOver] = useState(false);
   // 転倒シミュレーション（左右の限界姿勢）の表示切替。常時重ねると主オーバーレイが
@@ -307,7 +310,7 @@ export function Preview({
                   className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2"
                 >
                   <Loader2 className="size-8 animate-spin" />
-                  <p className="text-sm font-medium">3Dビューを読み込み中…</p>
+                  <p className="text-sm font-medium">{t('preview.loading3d')}</p>
                 </div>
               }
             >
@@ -492,8 +495,8 @@ export function Preview({
               onClick={() => setView3d((v) => !v)}
               disabled={!result}
               className={cn(show3d && 'text-primary bg-primary/10')}
-              title="3Dプレビュー"
-              aria-label="3Dプレビュー"
+              title={t('preview.toolbar.preview3d')}
+              aria-label={t('preview.toolbar.preview3d')}
               aria-pressed={show3d}
             >
               <Box />
@@ -507,8 +510,8 @@ export function Preview({
               onClick={() => setFinishView((v) => !v)}
               disabled={!overlay || show3d}
               className={cn(finishView && !show3d && 'text-primary bg-primary/10')}
-              title="完成プレビュー"
-              aria-label="完成プレビュー"
+              title={t('preview.toolbar.finishView')}
+              aria-label={t('preview.toolbar.finishView')}
               aria-pressed={finishView && !show3d}
             >
               <Eye />
@@ -524,8 +527,8 @@ export function Preview({
               className={cn(
                 showSimulation && !finishView && !show3d && 'text-primary bg-primary/10',
               )}
-              title="転倒シミュレーション"
-              aria-label="転倒シミュレーション"
+              title={t('preview.toolbar.simulation')}
+              aria-label={t('preview.toolbar.simulation')}
               aria-pressed={showSimulation && !finishView && !show3d}
             >
               <PersonStanding />
@@ -543,8 +546,8 @@ export function Preview({
                   onClick={() => setTopViewOverride(!(topViewOverride ?? topViewDefault))}
                   disabled={!topView}
                   className={cn(showTopView && 'text-primary bg-primary/10')}
-                  title="上面図（台座形状）"
-                  aria-label="上面図"
+                  title={t('preview.toolbar.topView')}
+                  aria-label={t('preview.toolbar.topViewAria')}
                   aria-pressed={showTopView}
                 >
                   <RectangleHorizontal />
@@ -556,8 +559,8 @@ export function Preview({
                   onClick={() => setShowGrid((v) => !v)}
                   disabled={mmPerPixel == null}
                   className={cn(showGrid && 'text-primary bg-primary/10')}
-                  title="グリッド表示"
-                  aria-label="グリッド表示"
+                  title={t('preview.toolbar.grid')}
+                  aria-label={t('preview.toolbar.grid')}
                   aria-pressed={showGrid}
                 >
                   <Grid3x3 />
@@ -566,8 +569,8 @@ export function Preview({
                   variant="ghost"
                   size="icon-sm"
                   onClick={zoomOut}
-                  title="縮小"
-                  aria-label="縮小"
+                  title={t('preview.toolbar.zoomOut')}
+                  aria-label={t('preview.toolbar.zoomOut')}
                 >
                   <Minus />
                 </Button>
@@ -577,7 +580,7 @@ export function Preview({
                   size="sm"
                   className="min-w-14 tabular-nums"
                   onClick={actualSize}
-                  title="100%表示"
+                  title={t('preview.toolbar.actualSize')}
                 >
                   {Math.round(s * 100)}%
                 </Button>
@@ -585,8 +588,8 @@ export function Preview({
                   variant="ghost"
                   size="icon-sm"
                   onClick={zoomIn}
-                  title="拡大"
-                  aria-label="拡大"
+                  title={t('preview.toolbar.zoomIn')}
+                  aria-label={t('preview.toolbar.zoomIn')}
                 >
                   <Plus />
                 </Button>
@@ -594,8 +597,8 @@ export function Preview({
                   variant="ghost"
                   size="icon-sm"
                   onClick={fit}
-                  title="全体表示（Fit）"
-                  aria-label="全体表示"
+                  title={t('preview.toolbar.fit')}
+                  aria-label={t('preview.toolbar.fit')}
                 >
                   <Maximize2 />
                 </Button>
@@ -618,7 +621,7 @@ export function Preview({
                 className="bg-background/80 text-muted-foreground pointer-events-none absolute left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-md border px-2 py-1 shadow-sm backdrop-blur"
               >
                 <Loader2 className="size-3.5 animate-spin" />
-                <span className="text-xs font-medium">更新中…</span>
+                <span className="text-xs font-medium">{t('preview.updating')}</span>
               </div>
             ) : (
               <div
@@ -627,18 +630,14 @@ export function Preview({
                 className="text-muted-foreground bg-background/70 pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 backdrop-blur-sm"
               >
                 <Loader2 className="size-8 animate-spin" />
-                <p className="text-sm font-medium">解析中…</p>
+                <p className="text-sm font-medium">{t('preview.analyzing')}</p>
               </div>
             ))}
         </>
       ) : (
         <div className="text-muted-foreground flex flex-col items-center gap-2 text-center">
           <ImageOff className="size-10 opacity-50" />
-          <p className="text-sm">
-            {isDragOver
-              ? 'ここにドロップ'
-              : 'PNG画像をドラッグ＆ドロップ、または読み込んでください'}
-          </p>
+          <p className="text-sm">{isDragOver ? t('preview.dropHere') : t('preview.dropPrompt')}</p>
         </div>
       )}
 
@@ -656,7 +655,7 @@ export function Preview({
           // 余白を残して折り返させる（translate による中央寄せだと折り返し幅を制限できない）。
           className="border-destructive/50 bg-background/90 text-destructive pointer-events-none absolute inset-x-2 z-20 mx-auto w-fit rounded-lg border px-4 py-2 text-sm shadow-sm backdrop-blur"
         >
-          {error.message}
+          {t(`errors.${error.kind}` as const)}
         </div>
       )}
     </div>

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { useTranslation } from '@/locales';
 
 export interface ExportPanelProps {
   /** SVG エクスポートを要求する。結果が無い場合は未指定で無効化される。 */
@@ -31,10 +32,12 @@ export function ExportPanel({
   onEmbedImageInSvgChange,
   exporting = false,
 }: ExportPanelProps) {
+  const { t } = useTranslation();
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>エクスポート</CardTitle>
+        <CardTitle>{t('exportPanel.title')}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {/* SVG 生成（実寸座標系）は onExportSvg に委ねる。解析結果が無ければ無効。 */}
@@ -45,7 +48,7 @@ export function ExportPanel({
           onClick={onExportSvg}
         >
           <Download />
-          SVGファイル (.svg)
+          {t('exportPanel.exportSvg')}
         </Button>
 
         {/* SVG は線データのみが既定。絵柄が要る場合だけ画像を埋め込む（ファイルは重くなる）。 */}
@@ -57,7 +60,7 @@ export function ExportPanel({
             disabled={exporting}
           />
           <Label htmlFor="embed-image-in-svg" className="text-muted-foreground text-sm font-normal">
-            SVGに絵柄画像を含める
+            {t('exportPanel.embedImage')}
           </Label>
         </div>
 
@@ -70,7 +73,7 @@ export function ExportPanel({
           onClick={onExportAi}
         >
           <Download />
-          Illustrator ドキュメント (.ai)
+          {t('exportPanel.exportAi')}
         </Button>
       </CardContent>
     </Card>
