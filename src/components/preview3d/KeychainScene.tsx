@@ -18,6 +18,7 @@ import {
 import { buildTexture, buildKeychainPlateGeometry } from '@/components/preview3d/geometry3d';
 import type { KeychainScene3dGeometry, Vec3 } from '@/render/scene3d';
 import type { ArtworkTextures } from '@/render/texture3d';
+import type { Size } from '@/model/types';
 
 const BACKGROUND_COLOR = '#e8ecf1';
 
@@ -52,6 +53,12 @@ export interface KeychainSceneProps {
   swingToken: number;
   /** 視点リセットのトリガー。 */
   resetToken?: number;
+  /** 背面に保護用アクリル板を表示するか。 */
+  showBackPlate?: boolean;
+  /** 背面アクリル板に貼る画像の canvas。null なら無地。 */
+  backTextureCanvas?: HTMLCanvasElement | null;
+  /** 背面画像の実寸(mm)。null なら画像を貼らない。 */
+  backImageSizeMm?: Size | null;
 }
 
 export function KeychainScene({
@@ -61,6 +68,9 @@ export function KeychainScene({
   autoRotate,
   swingToken,
   resetToken = 0,
+  showBackPlate = false,
+  backTextureCanvas = null,
+  backImageSizeMm = null,
 }: KeychainSceneProps) {
   const { plate, artwork, holeRadiusMm, chainLengthMm, ringRadiusMm, claspLengthMm, camera } =
     geometry;
@@ -71,6 +81,10 @@ export function KeychainScene({
   );
   const artworkTexture = useMemo(() => buildTexture(textures.artwork), [textures.artwork]);
   const whiteTexture = useMemo(() => buildTexture(textures.white), [textures.white]);
+  const backTexture = useMemo(
+    () => (backTextureCanvas ? buildTexture(backTextureCanvas) : null),
+    [backTextureCanvas],
+  );
   const metalMaterial = useMemo(
     () =>
       new MeshPhysicalMaterial({
@@ -86,7 +100,11 @@ export function KeychainScene({
   useEffect(() => () => plateGeometry.dispose(), [plateGeometry]);
   useEffect(() => () => artworkTexture.dispose(), [artworkTexture]);
   useEffect(() => () => whiteTexture.dispose(), [whiteTexture]);
+  useEffect(() => () => backTexture?.dispose(), [backTexture]);
   useEffect(() => () => metalMaterial.dispose(), [metalMaterial]);
+
+  const backPlateZ = -INK_GAP_MM * 2;
+  const backImageZ = backPlateZ - plate.thicknessMm;
 
   const controlsRef = useRef<ComponentRef<typeof OrbitControls> | null>(null);
 
@@ -235,6 +253,32 @@ export function KeychainScene({
                 metalness={0}
               />
             </mesh>
+
+            {/* 背面保護アクリル板。白版のすぐ後ろに同じカットライン・同じ向きで配置し、
+                前から見たとき輪郭が前面板と重なるようにする（リング穴も一直線に通る）。 */}
+            {showBackPlate && (
+              <mesh
+                geometry={plateGeometry}
+                position={[0, 0, backPlateZ - plate.thicknessMm]}
+              >
+                <AcrylicMaterial thicknessMm={plate.thicknessMm} side={DoubleSide} />
+              </mesh>
+            )}
+
+            {/* 背面画像：背面板の外側（奥面）に貼る。 */}
+            {showBackPlate && backTexture && backImageSizeMm && (
+              <mesh position={[artwork.centerX, artwork.centerY, backImageZ]}>
+                <planeGeometry args={[backImageSizeMm.width, backImageSizeMm.height]} />
+                <meshStandardMaterial
+                  map={backTexture}
+                  alphaTest={inkAlphaTest}
+                  alphaToCoverage
+                  side={DoubleSide}
+                  roughness={0.9}
+                  metalness={0}
+                />
+              </mesh>
+            )}
           </group>
         </group>
       </group>
@@ -242,7 +286,13 @@ export function KeychainScene({
   );
 }
 
-function AcrylicMaterial({ thicknessMm }: { thicknessMm: number }) {
+function AcrylicMaterial({
+  thicknessMm,
+  side,
+}: {
+  thicknessMm: number;
+  side?: 0 | 1 | 2;
+}) {
   return (
     <meshPhysicalMaterial
       color="#ffffff"
@@ -256,7 +306,7 @@ function AcrylicMaterial({ thicknessMm }: { thicknessMm: number }) {
       attenuationColor="#eaf4f6"
       attenuationDistance={150}
       envMapIntensity={1.1}
-      side={FrontSide}
+      side={side ?? FrontSide}
     />
   );
 }

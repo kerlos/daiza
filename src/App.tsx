@@ -235,6 +235,8 @@ function App() {
           image,
           parameters.alphaThreshold,
           parameters.thicknessMm,
+          parameters.showBackPlate,
+          state.backImage,
         );
         downloadDataUrl(dataUrl, exportMockupFileName(image.fileName, 'mockup3d'));
       } catch (cause) {
@@ -243,7 +245,15 @@ function App() {
         setExporting(false);
       }
     })();
-  }, [result, image, parameters.alphaThreshold, parameters.thicknessMm, actions]);
+  }, [
+    result,
+    image,
+    parameters.alphaThreshold,
+    parameters.thicknessMm,
+    parameters.showBackPlate,
+    state.backImage,
+    actions,
+  ]);
 
   return (
     <div className="bg-background flex h-svh flex-col">

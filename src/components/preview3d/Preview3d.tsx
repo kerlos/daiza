@@ -231,6 +231,9 @@ export default function Preview3d({ result, image, alphaThreshold, showBackPlate
                 autoRotate={autoRotate}
                 swingToken={swingToken}
                 resetToken={resetToken}
+                showBackPlate={showBackPlate}
+                backTextureCanvas={backTextureCanvas}
+                backImageSizeMm={backImageSizeMm}
               />
             ) : (
               <FigureScene

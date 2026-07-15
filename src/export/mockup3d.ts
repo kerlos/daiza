@@ -6,7 +6,7 @@
 // three はこのモジュールを dynamic import したときだけ読み込まれるため、
 // 2D 利用時の初期バンドルに影響しない（SPEC「初期バンドル・2D 利用時のロードには影響させない」）。
 
-import type { AnalysisResult, FigureImage, Point } from '@/model/types';
+import type { AnalysisResult, FigureImage, Point, Size } from '@/model/types';
 import {
   CAMERA_FOV_DEG,
   buildKeychainScene3d,
@@ -14,7 +14,7 @@ import {
   type KeychainScene3dGeometry,
   type Scene3dGeometry,
 } from '@/render/scene3d';
-import { buildArtworkTextures, inkAlphaTest } from '@/render/texture3d';
+import { buildArtworkTextures, buildBackTexture, inkAlphaTest } from '@/render/texture3d';
 
 /** 3D モックアップの出力サイズを調整するオプション。 */
 export interface Mockup3dOptions {
@@ -32,6 +32,8 @@ export async function generateMockup3dPng(
   image: FigureImage,
   alphaThreshold: number,
   thicknessMm: number,
+  showBackPlate: boolean = false,
+  backImage: FigureImage | null = null,
   options: Mockup3dOptions = {},
 ): Promise<string> {
   const size = options.size ?? 2048;
@@ -55,6 +57,10 @@ export async function generateMockup3dPng(
         }
       : undefined,
   );
+  const backTextureCanvas = backImage ? buildBackTexture(backImage.bitmap) : null;
+  const backImageSizeMm: Size | null = backImage
+    ? { width: backImage.width * result.mmPerPixel, height: backImage.height * result.mmPerPixel }
+    : null;
   const alphaTest = inkAlphaTest(alphaThreshold);
 
   const renderer = new THREE.WebGLRenderer({
@@ -142,16 +148,54 @@ export async function generateMockup3dPng(
   );
   scene.add(whitePlane);
 
-  // アクリル板の外形いっぱいに白を敷くことで、絵柄周りの透明部分を「白版裏打ち」に見せ、
-  // 広告用モックアップとして全体がソリッドに映るようにする。
-  const backingGeometry = buildPlateBackingGeometry(geometry.plate, THREE);
-  const backingMaterial = new THREE.MeshBasicMaterial({
-    color: 0xf5f5f5,
-    side: THREE.DoubleSide,
-  });
-  const backingPlane = new THREE.Mesh(backingGeometry, backingMaterial);
-  backingPlane.position.z = plateBackZ - inkGap * 3;
-  scene.add(backingPlane);
+  // 両面アクリル時は背面保護板を追加する。前から見たとき輪郭が前面板と重なるよう、
+  // 回転せずに奥へずらして配置する。
+  let backPlateMesh: import('three').Mesh | null = null;
+  let backImagePlane: import('three').Mesh | null = null;
+  let backTexture: import('three').CanvasTexture | null = null;
+  if (showBackPlate) {
+    const backPlate = new THREE.Mesh(
+      plateGeometry,
+      acrylicMaterial(geometry.plate.thicknessMm, THREE),
+    );
+    backPlate.position.z = plateBackZ - inkGap * 2 - geometry.plate.thicknessMm;
+    backPlateMesh = backPlate;
+    scene.add(backPlate);
+
+    if (backTextureCanvas && backImageSizeMm) {
+      backTexture = buildTexture(backTextureCanvas, THREE);
+      const plane = new THREE.Mesh(
+        new THREE.PlaneGeometry(backImageSizeMm.width, backImageSizeMm.height),
+        new THREE.MeshBasicMaterial({
+          map: backTexture,
+          alphaTest,
+          alphaToCoverage: true,
+          side: THREE.DoubleSide,
+          transparent: false,
+        }),
+      );
+      plane.position.set(
+        geometry.artwork.centerX,
+        geometry.artwork.centerY,
+        plateBackZ - inkGap * 2 - geometry.plate.thicknessMm,
+      );
+      backImagePlane = plane;
+      scene.add(plane);
+    }
+  } else {
+    // 片面アクリル時：アクリル板の外形いっぱいに白を敷くことで、絵柄周りの透明部分を
+    // 「白版裏打ち」に見せ、広告用モックアップとして全体がソリッドに映るようにする。
+    const backingGeometry = buildPlateBackingGeometry(geometry.plate, THREE, plateHole);
+    const backingMaterial = new THREE.MeshBasicMaterial({
+      color: 0xf5f5f5,
+      side: THREE.DoubleSide,
+    });
+    const backingPlane = new THREE.Mesh(backingGeometry, backingMaterial);
+    backingPlane.position.z = plateBackZ - inkGap * 3;
+    scene.add(backingPlane);
+    backingGeometry.dispose();
+    backingMaterial.dispose();
+  }
 
   if (!isKeychain) {
     const baseGeometry = buildBaseGeometry((geometry as Scene3dGeometry).base, THREE);
@@ -171,7 +215,6 @@ export async function generateMockup3dPng(
 
   // リソース解放。
   plateGeometry.dispose();
-  backingGeometry.dispose();
   artworkTexture.dispose();
   whiteTexture.dispose();
   plateMesh.material.dispose();
@@ -179,7 +222,14 @@ export async function generateMockup3dPng(
   (artworkPlane.material as { dispose(): void }).dispose();
   whitePlane.geometry.dispose();
   (whitePlane.material as { dispose(): void }).dispose();
-  backingMaterial.dispose();
+  if (backPlateMesh) {
+    (backPlateMesh.material as { dispose(): void }).dispose();
+  }
+  if (backImagePlane) {
+    backImagePlane.geometry.dispose();
+    (backImagePlane.material as { dispose(): void }).dispose();
+  }
+  backTexture?.dispose();
   renderer.dispose();
 
   return dataUrl;
@@ -237,8 +287,14 @@ function buildPlateGeometry(
 function buildPlateBackingGeometry(
   plate: { readonly outline: readonly Point[] },
   THREE: typeof import('three'),
+  hole?: { readonly center: Point; readonly radiusMm: number },
 ): import('three').ShapeGeometry {
   const shape = new THREE.Shape(plate.outline.map((p) => new THREE.Vector2(p.x, p.y)));
+  if (hole) {
+    const holePath = new THREE.Path();
+    holePath.absarc(hole.center.x, hole.center.y, hole.radiusMm, 0, Math.PI * 2, false);
+    shape.holes.push(holePath);
+  }
   return new THREE.ShapeGeometry(shape);
 }
 
