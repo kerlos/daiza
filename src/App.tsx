@@ -14,6 +14,8 @@ import { PaneResizer } from '@/components/PaneResizer';
 import { Preview } from '@/components/Preview';
 import { ResultPanel } from '@/components/ResultPanel';
 import { generateAi } from '@/export/ai';
+import { generateMockup2dPng } from '@/export/mockup2d';
+import { generateMockup3dPng } from '@/export/mockup3d';
 import { bitmapToPngBytes, bitmapToPngDataUrl } from '@/export/raster';
 import { generateSvg } from '@/export/svg';
 import { useAnalysis } from '@/hooks/useAnalysis';
@@ -35,10 +37,24 @@ function downloadBlob(blob: Blob, fileName: string): void {
   URL.revokeObjectURL(url);
 }
 
+/** data URL をそのままダウンロードさせる。 */
+function downloadDataUrl(dataUrl: string, fileName: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = dataUrl;
+  anchor.download = fileName;
+  anchor.click();
+}
+
 /** 画像ファイル名（例 figure.png）から、指定拡張子のダウンロード名を導く。 */
 function exportFileName(imageFileName: string, extension: string): string {
   const base = imageFileName.replace(/\.[^./\\]+$/, '');
   return `${base || 'daiza'}.${extension}`;
+}
+
+/** モックアップ PNG 用のファイル名（suffix: mockup2d / mockup3d など）。 */
+function exportMockupFileName(imageFileName: string, suffix: string): string {
+  const base = imageFileName.replace(/\.[^./\\]+$/, '');
+  return `${base || 'daiza'}-${suffix}.png`;
 }
 
 /**
@@ -192,6 +208,38 @@ function App() {
     })();
   }, [result, image, actions]);
 
+  // 2D 広告用モックアップ：前面図を商品写真風に仕上げた透過 PNG。
+  const handleExportMockup2d = useCallback(() => {
+    if (!result || !image) {
+      return;
+    }
+    try {
+      const dataUrl = generateMockup2dPng(result, image);
+      downloadDataUrl(dataUrl, exportMockupFileName(image.fileName, 'mockup2d'));
+    } catch (cause) {
+      actions.failAnalysis(toUnexpectedError(cause));
+    }
+  }, [result, image, actions]);
+
+  // 3D 広告用モックアップ：既定の 3D 視点で撮影した透過 PNG。
+  // three を dynamic import するため、生成中はボタンを止める。
+  const handleExportMockup3d = useCallback(() => {
+    if (!result || !image) {
+      return;
+    }
+    setExporting(true);
+    void (async () => {
+      try {
+        const dataUrl = await generateMockup3dPng(result, image, parameters.alphaThreshold);
+        downloadDataUrl(dataUrl, exportMockupFileName(image.fileName, 'mockup3d'));
+      } catch (cause) {
+        actions.failAnalysis(toUnexpectedError(cause));
+      } finally {
+        setExporting(false);
+      }
+    })();
+  }, [result, image, parameters.alphaThreshold, actions]);
+
   return (
     <div className="bg-background flex h-svh flex-col">
       <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
@@ -275,7 +323,14 @@ function App() {
             embedImageInSvg={embedImageInSvg}
             onEmbedImageInSvgChange={setEmbedImageInSvg}
             exporting={exporting}
-            {...(result ? { onExportSvg: handleExportSvg, onExportAi: handleExportAi } : {})}
+            {...(result
+              ? {
+                  onExportSvg: handleExportSvg,
+                  onExportAi: handleExportAi,
+                  onExportMockup2d: handleExportMockup2d,
+                  onExportMockup3d: handleExportMockup3d,
+                }
+              : {})}
           />
         </aside>
       </main>

@@ -83,6 +83,8 @@ export const en = {
   'exportPanel.exportSvg': 'SVG file (.svg)',
   'exportPanel.embedImage': 'Include artwork image in SVG',
   'exportPanel.exportAi': 'Illustrator document (.ai)',
+  'exportPanel.exportMockup2d': '2D mockup (.png)',
+  'exportPanel.exportMockup3d': '3D mockup (.png)',
 
   'preview.toolbar.preview3d': '3D preview',
   'preview.toolbar.finishView': 'Finish preview',

@@ -83,6 +83,8 @@ export const th: Record<TranslationKey, string> = {
   'exportPanel.exportSvg': 'ไฟล์ SVG (.svg)',
   'exportPanel.embedImage': 'รวมภาพ artwork ใน SVG',
   'exportPanel.exportAi': 'เอกสาร Illustrator (.ai)',
+  'exportPanel.exportMockup2d': 'ม็อกอัป 2D (.png)',
+  'exportPanel.exportMockup3d': 'ม็อกอัป 3D (.png)',
 
   'preview.toolbar.preview3d': 'ตัวอย่าง 3D',
   'preview.toolbar.finishView': 'ตัวอย่างสำเร็จรูป',

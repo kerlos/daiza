@@ -83,6 +83,8 @@ export const ja: Record<TranslationKey, string> = {
   'exportPanel.exportSvg': 'SVGファイル (.svg)',
   'exportPanel.embedImage': 'SVGに絵柄画像を含める',
   'exportPanel.exportAi': 'Illustrator ドキュメント (.ai)',
+  'exportPanel.exportMockup2d': '2Dモックアップ (.png)',
+  'exportPanel.exportMockup3d': '3Dモックアップ (.png)',
 
   'preview.toolbar.preview3d': '3Dプレビュー',
   'preview.toolbar.finishView': '完成プレビュー',

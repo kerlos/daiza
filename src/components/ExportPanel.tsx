@@ -5,7 +5,7 @@
 // 直下に置く。状態は保持せず、生成・ダウンロードは上位（App）に委ねる presentational
 // コンポーネント。
 
-import { Download } from 'lucide-react';
+import { Box, Download, Image } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -18,6 +18,10 @@ export interface ExportPanelProps {
   onExportSvg?: () => void;
   /** Illustrator（.ai）エクスポートを要求する。結果が無い場合は未指定で無効化される。 */
   onExportAi?: () => void;
+  /** 2D 広告用モックアップ PNG をエクスポートする。結果が無い場合は未指定で無効化される。 */
+  onExportMockup2d?: () => void;
+  /** 3D 広告用モックアップ PNG をエクスポートする。結果が無い場合は未指定で無効化される。 */
+  onExportMockup3d?: () => void;
   /** SVG に絵柄画像を埋め込むか（.ai は常に埋め込むため対象外）。 */
   embedImageInSvg: boolean;
   onEmbedImageInSvgChange: (value: boolean) => void;
@@ -28,6 +32,8 @@ export interface ExportPanelProps {
 export function ExportPanel({
   onExportSvg,
   onExportAi,
+  onExportMockup2d,
+  onExportMockup3d,
   embedImageInSvg,
   onEmbedImageInSvgChange,
   exporting = false,
@@ -74,6 +80,28 @@ export function ExportPanel({
         >
           <Download />
           {t('exportPanel.exportAi')}
+        </Button>
+
+        {/* 広告用モックアップ PNG（2D / 3D）。背景透過でそのまま合成できる。 */}
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full"
+          disabled={!onExportMockup2d || exporting}
+          onClick={onExportMockup2d}
+        >
+          <Image />
+          {t('exportPanel.exportMockup2d')}
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full"
+          disabled={!onExportMockup3d || exporting}
+          onClick={onExportMockup3d}
+        >
+          <Box />
+          {t('exportPanel.exportMockup3d')}
         </Button>
       </CardContent>
     </Card>
