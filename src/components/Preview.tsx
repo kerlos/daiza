@@ -20,7 +20,7 @@
 // 3D モードへ初めて切り替えたときにだけ読み込む（SPEC「技術・読み込み」）。3 つのモードは
 // いずれも**表示のみの切替**で、解析結果・パラメータには一切触れない。
 
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
   Box,
@@ -135,11 +135,26 @@ export function Preview({
   const [finishView, setFinishView] = useState(false);
   // 3D プレビューモードの表示切替。こちらも表示のみの切替。
   const [view3d, setView3d] = useState(false);
+  // 一度でも 3D ボタンを押したら true にし、3D プレビューをアンマウントせず保持する。
+  const [hasActivated3d, setHasActivated3d] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // 3D チャンクは初回切替時に動的読み込みするが、解析結果が出そうな段階で先に読み込みを
+  // 開始しておく。これにより「3D ボタンを押してから読み込み」による遅延・再マウントを減らす。
+  useEffect(() => {
+    if (result) {
+      console.log('[Preview] preloading 3D chunk');
+      void import('@/components/preview3d/Preview3d');
+    }
+  }, [result]);
 
   // 3D は解析結果が要る（立体を組み立てられない）。解析エラーで結果が消えた場合は
   // 自動的に 2D へ戻し、エラー表示が読める状態にする（SPEC「解析結果があるときのみ有効」）。
   const show3d = view3d && result != null && image != null;
+
+  useEffect(() => {
+    console.log('[Preview] 3D state changed', { view3d, hasActivated3d, show3d });
+  }, [view3d, hasActivated3d, show3d]);
 
   // 読み込みハンドラが無ければ D&D は無効。ハンドラの有無で振る舞いを分ける。
   const dropEnabled = Boolean(onImageFile);
@@ -311,39 +326,43 @@ export function Preview({
             />
           )}
 
-          {/* 3D プレビュー：チャンクの読み込み中はインジケータを出す（初回切替時のみ）。
-              2D の stage は描かないが、useViewport の変換 state は保持される。 */}
-          {show3d && result && (
-            <Suspense
-              fallback={
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2"
-                >
-                  <Loader2 className="size-8 animate-spin" />
-                  <p className="text-sm font-medium">{t('preview.loading3d')}</p>
-                </div>
-              }
-            >
-              <Preview3d
-                result={result}
-                image={image}
-                alphaThreshold={alphaThreshold}
-                showBackPlate={showBackPlate}
-                backImage={backImage}
-              />
-            </Suspense>
+          {/* 3D プレビュー：初回読み込み後はアンマウントせず `display` で出し分ける。
+              これにより WebGL コンテキスト・Rapier ワールドの再作成を防ぎ、
+              2D ↔ 3D の切り替えが安定する（SPEC「3D 切替は表示のみ」）。
+              チャンクの読み込み中はインジケータを出す（初回切替時のみ）。 */}
+          {result && hasActivated3d && (
+            <KeepAlive3d active={show3d}>
+              <Suspense
+                fallback={
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2"
+                  >
+                    <Loader2 className="size-8 animate-spin" />
+                    <p className="text-sm font-medium">{t('preview.loading3d')}</p>
+                  </div>
+                }
+              >
+                <Preview3d
+                  result={result}
+                  image={image}
+                  alphaThreshold={alphaThreshold}
+                  showBackPlate={showBackPlate}
+                  backImage={backImage}
+                />
+              </Suspense>
+            </KeepAlive3d>
           )}
 
           {/* stage：画像の自然サイズを持つ箱。左上原点で transform を適用し、内包する
               Canvas と SVG をまとめて拡縮・移動する。両者は同一の箱を満たすため常に重なる。
-              3D 中はアンマウントせず hidden で隠す：Canvas への描画は画像が変わったときの
+              3D 中はアンマウントせず display:none で隠す：Canvas への描画は画像が変わったときの
               effect でしか行わないため、アンマウントすると 2D へ戻ったとき白紙になる。 */}
           <div
-            hidden={show3d}
             className="absolute top-0 left-0 origin-top-left"
             style={{
+              display: show3d ? 'none' : 'block',
               width: image.width,
               height: image.height,
               transform: `translate(${transform.tx}px, ${transform.ty}px) scale(${s})`,
@@ -510,7 +529,11 @@ export function Preview({
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={() => setView3d((v) => !v)}
+              onClick={() => {
+                console.log('[Preview] 3D toggle clicked');
+                setView3d((v) => !v);
+                setHasActivated3d(true);
+              }}
               disabled={!result}
               className={cn(show3d && 'text-primary bg-primary/10')}
               title={t('preview.toolbar.preview3d')}
@@ -676,6 +699,25 @@ export function Preview({
           {t(`errors.${error.kind}` as const)}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 3D プレビューを切替時にアンマウントしないためのラッパー。
+ *
+ * 親が `hasActivated3d` を true にしてからは常に子を保持し、
+ * それ以降は `display` で表示／非表示を切り替えるだけ。
+ * これにより WebGL コンテキストや Rapier ワールドの再作成が起きず、
+ * 2D ↔ 3D の往復が安定する。
+ */
+function KeepAlive3d({ active, children }: { active: boolean; children: ReactNode }) {
+  return (
+    <div
+      style={{ display: active ? 'block' : 'none' }}
+      className="absolute inset-0"
+    >
+      {children}
     </div>
   );
 }

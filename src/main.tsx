@@ -1,4 +1,3 @@
-import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
@@ -11,12 +10,10 @@ if (!rootElement) {
 }
 
 createRoot(rootElement).render(
-  <StrictMode>
-    <LocaleProvider>
-      {/* アプリ全体を Error Boundary で包み、描画中の想定外例外による白画面を防ぐ。 */}
-      <ErrorBoundary>
-        <App />
-      </ErrorBoundary>
-    </LocaleProvider>
-  </StrictMode>,
+  <LocaleProvider>
+    {/* アプリ全体を Error Boundary で包み、描画中の想定外例外による白画面を防ぐ。 */}
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  </LocaleProvider>,
 );

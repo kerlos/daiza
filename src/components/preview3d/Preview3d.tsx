@@ -11,10 +11,10 @@
 // 床テクスチャのアップロード UI も含め、3D の操作はすべてこのビューポート内で完結させる
 // （左のパラメータパネルは解析に効く値だけを持ち、見た目の設定は持ち込まない）。
 
-import { useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Canvas } from '@react-three/fiber';
-import { Blend, Crosshair, Grid3x3, Layers2 } from 'lucide-react';
+import { Blend, Crosshair, Grid3x3, Layers2, Loader2 } from 'lucide-react';
 
 import { FigureScene } from '@/components/preview3d/FigureScene';
 import { useFloorTexture } from '@/components/preview3d/useFloorTexture';
@@ -61,8 +61,27 @@ export interface Preview3dProps {
 export default function Preview3d({ result, image, alphaThreshold, showBackPlate, backImage }: Preview3dProps) {
   const { t } = useTranslation();
 
+  useEffect(() => {
+    console.log('[Preview3d] mounted', { imageId: image.id, showBackPlate });
+    return () => {
+      console.log('[Preview3d] unmounted');
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    console.log('[Preview3d] props changed', {
+      imageId: image.id,
+      showBackPlate,
+      backImage: backImage?.id ?? null,
+    });
+  }, [image.id, showBackPlate, backImage]);
+
   // 解析結果・画像が変わったときだけ作り直す（パラメータ変更のたびの再構築は避ける）。
-  const geometry = useMemo(() => buildScene3d(result), [result]);
+  const geometry = useMemo(() => {
+    console.log('[Preview3d] building geometry');
+    return buildScene3d(result);
+  }, [result]);
   const textures = useMemo(
     () => buildArtworkTextures(image.bitmap, alphaThreshold),
     [image.bitmap, alphaThreshold],
@@ -92,6 +111,32 @@ export default function Preview3d({ result, image, alphaThreshold, showBackPlate
   const floor = useFloorTexture();
   const floorFileRef = useRef<HTMLInputElement>(null);
 
+  // React StrictMode では開発時にコンポーネントが即座に mount → unmount → mount され、
+  // WebGL コンテキストが作成直後に破棄されて「Context Lost」になる。それを避けるため、
+  // 初回 render では Canvas を作らず、さらに Rapier WASM を先に初期化してから生成する。
+  // これにより <Physics> の suspend が Canvas 生成後に発生し、プレビューがアンマウント
+  // されることも防ぐ。
+  const [canvasReady, setCanvasReady] = useState(false);
+  useEffect(() => {
+    let canceled = false;
+    console.log('[Preview3d] initializing Rapier + scheduling Canvas');
+    void (async () => {
+      try {
+        const r = await import('@dimforge/rapier3d-compat');
+        await r.init();
+        if (!canceled) {
+          console.log('[Preview3d] Rapier ready, creating Canvas');
+          setCanvasReady(true);
+        }
+      } catch (err) {
+        console.error('[Preview3d] Rapier initialization failed', err);
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
   // ドロップテストの状態。高さ 0–50mm、既定 10mm。着地後は安定/転倒を表示する。
   const [dropHeightMm, setDropHeightMm] = useState(10);
   const [dropPhase, setDropPhase] = useState<'idle' | 'dropping' | 'landed'>('idle');
@@ -104,11 +149,11 @@ export default function Preview3d({ result, image, alphaThreshold, showBackPlate
     }
   };
   const startDrop = () => {
-    // 現在の傾き・方向で落下させる。傾きがその方位の転倒角を超えていれば転倒する。
-    const stable = tiltAmountDeg <= limitDeg;
+    // 現在の傾き・方向を初期姿勢として物理シミュレーションを開始。
+    // 安定性は着地後の剛体状態から判定する。
     setExploded(false);
     setDropPhase('dropping');
-    setDropStable(stable);
+    setDropStable(null);
   };
 
   const { tilt } = geometry;
@@ -147,40 +192,68 @@ export default function Preview3d({ result, image, alphaThreshold, showBackPlate
 
   return (
     <div className="absolute inset-0">
-      <Canvas
-        frameloop="demand"
-        dpr={[1, 2]}
-        gl={{ antialias: true }}
-        camera={{
-          fov: CAMERA_FOV_DEG,
-          near: CAMERA_NEAR_MM,
-          far: CAMERA_FAR_MM,
-          position: [...geometry.camera.position],
-        }}
-      >
-        <FigureScene
-          geometry={geometry}
-          textures={textures}
-          inkAlphaTest={inkAlphaTest(alphaThreshold)}
-          tiltAzimuthDeg={tiltAzimuthDeg}
-          tiltDeg={tiltAmountDeg}
-          exploded={exploded}
-          translucentBase={translucentBase}
-          showBackPlate={showBackPlate}
-          backTextureCanvas={backTextureCanvas}
-          backImageSizeMm={backImageSizeMm}
-          floorImage={floor.image}
-          floorGrid={floorGrid}
-          resetToken={resetToken}
-          dropPhase={dropPhase}
-          dropHeightMm={dropHeightMm}
-          dropStable={dropStable}
-          onDropLanded={(stable) => {
-            setDropPhase('landed');
-            setDropStable(stable);
+      {!canvasReady ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2"
+        >
+          <Loader2 className="size-8 animate-spin" />
+          <p className="text-sm font-medium">{t('preview.loading3d')}</p>
+        </div>
+      ) : (
+        <Canvas
+          frameloop="demand"
+          dpr={[1, 2]}
+          gl={{ antialias: true }}
+          camera={{
+            fov: CAMERA_FOV_DEG,
+            near: CAMERA_NEAR_MM,
+            far: CAMERA_FAR_MM,
+            position: [...geometry.camera.position],
           }}
-        />
-      </Canvas>
+          onCreated={({ gl }) => {
+            const canvas = gl.domElement;
+            console.log('[Preview3d] Canvas/WebGL context created', {
+              renderer: gl.constructor.name,
+              width: canvas.width,
+              height: canvas.height,
+            });
+            canvas.addEventListener('webglcontextlost', (event) => {
+              console.error('[Preview3d] WebGL context lost', event);
+            });
+            canvas.addEventListener('webglcontextrestored', (event) => {
+              console.log('[Preview3d] WebGL context restored', event);
+            });
+          }}
+        >
+          {/* <Physics> が Rapier WASM を suspend しても Canvas ごとアンマウントしないよう、
+              Canvas 内部に Suspense を置く。外側の Suspense はチャンク読み込み専用。 */}
+          <Suspense fallback={null}>
+            <FigureScene
+              geometry={geometry}
+              textures={textures}
+              inkAlphaTest={inkAlphaTest(alphaThreshold)}
+              tiltAzimuthDeg={tiltAzimuthDeg}
+              tiltDeg={tiltAmountDeg}
+              exploded={exploded}
+              translucentBase={translucentBase}
+              showBackPlate={showBackPlate}
+              backTextureCanvas={backTextureCanvas}
+              backImageSizeMm={backImageSizeMm}
+              floorImage={floor.image}
+              floorGrid={floorGrid}
+              resetToken={resetToken}
+              dropPhase={dropPhase}
+              dropHeightMm={dropHeightMm}
+              onDropLanded={(stable) => {
+                setDropPhase('landed');
+                setDropStable(stable);
+              }}
+            />
+          </Suspense>
+        </Canvas>
+      )}
 
       {/* 3D 操作パネル。プレビュー右下の表示操作コントロールと重ならないよう左下へ置く。 */}
       <div className="bg-background/80 absolute bottom-2 left-2 w-72 rounded-md border p-2 shadow-sm backdrop-blur">
