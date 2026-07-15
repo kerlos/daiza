@@ -7,7 +7,13 @@
 // 2D 利用時の初期バンドルに影響しない（SPEC「初期バンドル・2D 利用時のロードには影響させない」）。
 
 import type { AnalysisResult, FigureImage, Point } from '@/model/types';
-import { CAMERA_FOV_DEG, buildScene3d } from '@/render/scene3d';
+import {
+  CAMERA_FOV_DEG,
+  buildKeychainScene3d,
+  buildScene3d,
+  type KeychainScene3dGeometry,
+  type Scene3dGeometry,
+} from '@/render/scene3d';
 import { buildArtworkTextures, inkAlphaTest } from '@/render/texture3d';
 
 /** 3D モックアップの出力サイズを調整するオプション。 */
@@ -25,16 +31,30 @@ export async function generateMockup3dPng(
   result: AnalysisResult,
   image: FigureImage,
   alphaThreshold: number,
+  thicknessMm: number,
   options: Mockup3dOptions = {},
 ): Promise<string> {
   const size = options.size ?? 2048;
+  const isKeychain = result.keychain != null;
 
   // three は必要になったときだけ読み込む（dynamic import）。
   const THREE = await import('three');
   const { RoomEnvironment } = await import('three/examples/jsm/environments/RoomEnvironment.js');
 
-  const geometry = buildScene3d(result);
-  const textures = buildArtworkTextures(image.bitmap, alphaThreshold);
+  const geometry: Scene3dGeometry | KeychainScene3dGeometry = isKeychain
+    ? buildKeychainScene3d(result, thicknessMm)
+    : buildScene3d(result);
+  const textures = buildArtworkTextures(
+    image.bitmap,
+    alphaThreshold,
+    isKeychain
+      ? {
+          center: result.keychain!.holeCenterPixel,
+          radiusMm: result.keychain!.holeRadiusMm,
+          mmPerPixel: result.mmPerPixel,
+        }
+      : undefined,
+  );
   const alphaTest = inkAlphaTest(alphaThreshold);
 
   const renderer = new THREE.WebGLRenderer({
@@ -66,10 +86,15 @@ export async function generateMockup3dPng(
   rimLight.position.set(-300, 200, -400);
   scene.add(rimLight);
 
-  const plateGeometry = buildPlateGeometry(geometry.plate, THREE);
-  const baseGeometry = buildBaseGeometry(geometry.base, THREE);
+  const plateHole = isKeychain
+    ? { center: { x: 0, y: 0 }, radiusMm: result.keychain!.holeRadiusMm }
+    : undefined;
+  const plateGeometry = buildPlateGeometry(geometry.plate, THREE, plateHole);
 
-  const plateBackZ = geometry.plate.centerZMm - geometry.plate.thicknessMm / 2;
+  const plateBackZ =
+    'centerZMm' in geometry.plate
+      ? geometry.plate.centerZMm - geometry.plate.thicknessMm / 2
+      : -geometry.plate.thicknessMm / 2;
   const inkGap = 0.15;
 
   const plateMesh = new THREE.Mesh(
@@ -128,9 +153,17 @@ export async function generateMockup3dPng(
   backingPlane.position.z = plateBackZ - inkGap * 3;
   scene.add(backingPlane);
 
-  const baseMesh = new THREE.Mesh(baseGeometry, acrylicMaterial(geometry.base.thicknessMm, THREE));
-  baseMesh.rotation.x = -Math.PI / 2;
-  scene.add(baseMesh);
+  if (!isKeychain) {
+    const baseGeometry = buildBaseGeometry((geometry as Scene3dGeometry).base, THREE);
+    const baseMesh = new THREE.Mesh(
+      baseGeometry,
+      acrylicMaterial((geometry as Scene3dGeometry).base.thicknessMm, THREE),
+    );
+    baseMesh.rotation.x = -Math.PI / 2;
+    scene.add(baseMesh);
+    baseGeometry.dispose();
+    baseMesh.material.dispose();
+  }
 
   renderer.render(scene, camera);
 
@@ -138,7 +171,6 @@ export async function generateMockup3dPng(
 
   // リソース解放。
   plateGeometry.dispose();
-  baseGeometry.dispose();
   backingGeometry.dispose();
   artworkTexture.dispose();
   whiteTexture.dispose();
@@ -148,7 +180,6 @@ export async function generateMockup3dPng(
   whitePlane.geometry.dispose();
   (whitePlane.material as { dispose(): void }).dispose();
   backingMaterial.dispose();
-  baseMesh.material.dispose();
   renderer.dispose();
 
   return dataUrl;
@@ -187,8 +218,14 @@ function buildTexture(
 function buildPlateGeometry(
   plate: { readonly outline: readonly Point[]; readonly thicknessMm: number },
   THREE: typeof import('three'),
+  hole?: { readonly center: Point; readonly radiusMm: number },
 ): import('three').ExtrudeGeometry {
   const shape = new THREE.Shape(plate.outline.map((p) => new THREE.Vector2(p.x, p.y)));
+  if (hole) {
+    const holePath = new THREE.Path();
+    holePath.absarc(hole.center.x, hole.center.y, hole.radiusMm, 0, Math.PI * 2, false);
+    shape.holes.push(holePath);
+  }
   return new THREE.ExtrudeGeometry(shape, {
     bevelEnabled: false,
     steps: 1,

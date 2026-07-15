@@ -45,7 +45,7 @@ import { buildSimulationShapes } from '@/render/simulation';
 import { buildTopViewShapes } from '@/render/topView';
 import { useViewport, type ContentBox } from '@/hooks/useViewport';
 import type { AnalysisStatus } from '@/model/state';
-import type { AnalysisError, AnalysisResult, FigureImage, Point } from '@/model/types';
+import type { AnalysisError, AnalysisResult, DesignMode, FigureImage, Point } from '@/model/types';
 import { cn } from '@/lib/utils';
 import { closedCurvePathData } from '@/utils/curve';
 import { radToDeg } from '@/utils/geometry';
@@ -88,11 +88,15 @@ export interface PreviewProps {
    * 省略時は false。
    */
   showBackPlate?: boolean;
+  /** 現在のデザインモード。keychain モードでは 2D オーバーレイの内容を変える。 */
+  designMode?: DesignMode;
   /**
    * 背面アクリル板に貼る画像。3D プレビューのみ使用する表示アセット。
    * 省略時は null。
    */
   backImage?: FigureImage | null;
+  /** アクリル板の板厚(mm)。3D プレビューで使用する。 */
+  thicknessMm?: number;
   /** 解析の進行状態。'analyzing' の間は解析中インジケータを重ねる。 */
   status?: AnalysisStatus;
   /**
@@ -111,11 +115,14 @@ export function Preview({
   mmPerPixel,
   alphaThreshold = 0,
   showBackPlate = false,
+  designMode = 'baseFigure',
   backImage = null,
+  thicknessMm = 3,
   status,
   error,
   onImageFile,
 }: PreviewProps) {
+  const isKeychain = designMode === 'keychain';
   const { t } = useTranslation();
 
   // ドラッグ中はドロップ可能であることを視覚的に示すためのフラグ。
@@ -157,21 +164,27 @@ export function Preview({
   // オーバーレイ図形は解析結果が変わったときだけ再構築する（不要な再計算の抑制）。
   const overlay = useMemo(() => (result ? buildOverlayShapes(result) : null), [result]);
 
-  // 転倒姿勢も同様に結果が変わったときだけ再構築する。トグル OFF でも構築コストは
-  // 軽い（支点 2 点の算出のみ）ため result を唯一の依存とし、描画側で表示を出し分ける。
-  const simulation = useMemo(() => (result ? buildSimulationShapes(result) : null), [result]);
+  // 転倒姿勢も同様に結果が変わったときだけ再構築する。baseFigure 結果があるときのみ。
+  const simulation = useMemo(
+    () => (result && !result.keychain ? buildSimulationShapes(result) : null),
+    [result],
+  );
 
-  // 上面図（footprint・スリット・重心投影・最悪方位）。こちらも軽いので result 依存で作る。
-  const topView = useMemo(() => (result ? buildTopViewShapes(result) : null), [result]);
+  // 上面図（footprint・スリット・重心投影・最悪方位）。baseFigure 結果があるときのみ。
+  const topView = useMemo(
+    () => (result && !result.keychain ? buildTopViewShapes(result) : null),
+    [result],
+  );
 
   // 既定は矩形以外で ON（矩形は前面図だけで形状が分かる）。ユーザーが一度でも切り替えたら
   // その選択を優先する（SPEC「ユーザーのトグル操作を優先する」）。3D 中は出さない。
-  const topViewDefault = result != null && result.base.shape !== 'rect';
-  const showTopView = (topViewOverride ?? topViewDefault) && topView != null && !show3d;
+  // baseFigure 結果があるときのみ。
+  const topViewDefault = result != null && !result.keychain && result.base?.shape !== 'rect';
+  const showTopView = (topViewOverride ?? topViewDefault) && topView != null && !show3d && !result?.keychain;
 
   // Fit/100% が収める内容範囲。画像だけでなくカットライン（余白で画像枠外へ広がり得る）や
-  // 差込口・台座・支持範囲を含む外接矩形にすることで、余白を増やしても見切れないようにする
-  // （SPEC「表示範囲（見切れ防止）」）。解析前は画像そのものを範囲とする。
+  // 差込口・台座・支持範囲・キーホルダー穴を含む外接矩形にすることで、余白を増やしても
+  // 見切れないようにする（SPEC「表示範囲（見切れ防止）」）。解析前は画像そのものを範囲とする。
   const contentBox = useMemo<ContentBox | null>(() => {
     if (!image) {
       return null;
@@ -194,13 +207,23 @@ export function Preview({
       include(p.x, p.y);
     }
     for (const rect of [overlay.neck, overlay.tab, overlay.base]) {
-      include(rect.x, rect.y);
-      include(rect.x + rect.width, rect.y + rect.height);
+      if (rect) {
+        include(rect.x, rect.y);
+        include(rect.x + rect.width, rect.y + rect.height);
+      }
     }
-    include(overlay.support.from.x, overlay.support.from.y);
-    include(overlay.support.to.x, overlay.support.to.y);
-    include(overlay.plumb.from.x, overlay.plumb.from.y);
-    include(overlay.plumb.to.x, overlay.plumb.to.y);
+    if (overlay.support) {
+      include(overlay.support.from.x, overlay.support.from.y);
+      include(overlay.support.to.x, overlay.support.to.y);
+    }
+    if (overlay.plumb) {
+      include(overlay.plumb.from.x, overlay.plumb.from.y);
+      include(overlay.plumb.to.x, overlay.plumb.to.y);
+    }
+    if (overlay.hole) {
+      include(overlay.hole.center.x - overlay.hole.radius, overlay.hole.center.y - overlay.hole.radius);
+      include(overlay.hole.center.x + overlay.hole.radius, overlay.hole.center.y + overlay.hole.radius);
+    }
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   }, [image, overlay]);
 
@@ -212,8 +235,12 @@ export function Preview({
     if (!overlay) {
       return { x: 0, y: image?.height ?? 0 };
     }
+    if (isKeychain || !overlay.base) {
+      // keychain モードでは重心を原点、Y は画像下端を基準にする。
+      return { x: overlay.centroid.center.x, y: image?.height ?? overlay.centroid.center.y };
+    }
     return { x: overlay.centroid.center.x, y: overlay.base.y + overlay.base.height };
-  }, [overlay, image]);
+  }, [overlay, image, isKeychain]);
 
   // 表示操作（ズーム/パン/Fit/100%）。自動フィットは画像の同一性（id）で制御し、
   // パラメータ変更（box の変化）ではユーザーのズーム/パンを保つ。3D 中は 2D の
@@ -345,6 +372,7 @@ export function Preview({
                   alphaThreshold={alphaThreshold}
                   showBackPlate={showBackPlate}
                   backImage={backImage}
+                  thicknessMm={thicknessMm}
                 />
               </Suspense>
             </KeepAlive3d>
@@ -425,59 +453,75 @@ export function Preview({
                   strokeWidth={1 / s}
                 />
 
-                {/* 台座。上辺が台座上面。差込部・支持範囲より背面に置くため先に描く。
-                    通常は緑のハイライトだが、完成プレビューモードでは仕上がりを見るため
-                    カットラインと同色にそろえる。 */}
-                <rect
-                  x={overlay.base.x}
-                  y={overlay.base.y}
-                  width={overlay.base.width}
-                  height={overlay.base.height}
-                  fill={finishView ? CONTOUR_FILL : 'rgba(34, 197, 94, 0.25)'}
-                  stroke={finishView ? CONTOUR_STROKE : 'rgb(22, 163, 74)'}
-                  strokeWidth={1.5 / s}
-                />
+                {/* 台座。baseFigure モードのみ。 */}
+                {overlay.base && (
+                  <rect
+                    x={overlay.base.x}
+                    y={overlay.base.y}
+                    width={overlay.base.width}
+                    height={overlay.base.height}
+                    fill={finishView ? CONTOUR_FILL : 'rgba(34, 197, 94, 0.25)'}
+                    stroke={finishView ? CONTOUR_STROKE : 'rgb(22, 163, 74)'}
+                    strokeWidth={1.5 / s}
+                  />
+                )}
+
+                {/* キーホルダー穴。keychain モードでは常に描く（仕上がりにも含まれる要素）。 */}
+                {overlay.hole && (
+                  <circle
+                    cx={overlay.hole.center.x}
+                    cy={overlay.hole.center.y}
+                    r={overlay.hole.radius}
+                    fill="rgba(239, 68, 68, 0.15)"
+                    stroke="rgb(239, 68, 68)"
+                    strokeWidth={1.5 / s}
+                  />
+                )}
 
                 {/* ここから下は解析表示モード専用のガイド。完成プレビューモードでは
-                    絵柄・カットライン・台座だけを見せるため一切描かない。 */}
+                    絵柄・カットライン・台座・穴だけを見せるため一切描かない。 */}
                 {!finishView && (
                   <>
-                    {/* 差込部（青矩形 2 つ）。首部＝板と台座の隙間を埋める広い矩形、ツメ＝台座上面
-                        より下へ挿さる狭い矩形。幅の差でできる肩が台座上面に乗って止まる。 */}
-                    {[overlay.neck, overlay.tab].map((rect) => (
-                      <rect
-                        key={rect.role}
-                        x={rect.x}
-                        y={rect.y}
-                        width={rect.width}
-                        height={rect.height}
-                        fill="rgba(37, 99, 235, 0.25)"
-                        stroke="rgb(37, 99, 235)"
-                        strokeWidth={1.5 / s}
+                    {/* 差込部（青矩形 2 つ）。baseFigure モードのみ。 */}
+                    {overlay.neck && overlay.tab &&
+                      [overlay.neck, overlay.tab].map((rect) => (
+                        <rect
+                          key={rect.role}
+                          x={rect.x}
+                          y={rect.y}
+                          width={rect.width}
+                          height={rect.height}
+                          fill="rgba(37, 99, 235, 0.25)"
+                          stroke="rgb(37, 99, 235)"
+                          strokeWidth={1.5 / s}
+                        />
+                      ))}
+
+                    {/* 支持範囲（オレンジ線）。baseFigure モードのみ。 */}
+                    {overlay.support && (
+                      <line
+                        x1={overlay.support.from.x}
+                        y1={overlay.support.from.y}
+                        x2={overlay.support.to.x}
+                        y2={overlay.support.to.y}
+                        stroke="rgb(249, 115, 22)"
+                        strokeWidth={3 / s}
+                        strokeLinecap="round"
                       />
-                    ))}
+                    )}
 
-                    {/* 支持範囲（オレンジ線）。 */}
-                    <line
-                      x1={overlay.support.from.x}
-                      y1={overlay.support.from.y}
-                      x2={overlay.support.to.x}
-                      y2={overlay.support.to.y}
-                      stroke="rgb(249, 115, 22)"
-                      strokeWidth={3 / s}
-                      strokeLinecap="round"
-                    />
-
-                    {/* 重心からの鉛直線（点線）。支持範囲と対比させて転倒余裕を目視する。 */}
-                    <line
-                      x1={overlay.plumb.from.x}
-                      y1={overlay.plumb.from.y}
-                      x2={overlay.plumb.to.x}
-                      y2={overlay.plumb.to.y}
-                      stroke="rgba(239, 68, 68, 0.9)"
-                      strokeWidth={1.5 / s}
-                      strokeDasharray={`${6 / s} ${4 / s}`}
-                    />
+                    {/* 重心からの鉛直線（点線）。baseFigure モードのみ。 */}
+                    {overlay.plumb && (
+                      <line
+                        x1={overlay.plumb.from.x}
+                        y1={overlay.plumb.from.y}
+                        x2={overlay.plumb.to.x}
+                        y2={overlay.plumb.to.y}
+                        stroke="rgba(239, 68, 68, 0.9)"
+                        strokeWidth={1.5 / s}
+                        strokeDasharray={`${6 / s} ${4 / s}`}
+                      />
+                    )}
 
                     {/* 重心（赤丸）。最前面へ置いて他図形に埋もれないようにする。 */}
                     <circle
@@ -552,13 +596,13 @@ export function Preview({
               <Eye />
             </Button>
             {/* 転倒シミュレーション表示切替。解析結果が無い間は対象が無いので無効化。
-                完成プレビューモード・3D モードではガイドを一切出さないためトグル自体を
-                無効化する（3D の転倒は Preview3d の傾けスライダーで行う）。 */}
+                keychain モードでは転倒シミュレーションを使わない。完成プレビューモード・3D モード
+                ではガイドを一切出さないためトグル自体を無効化する。 */}
             <Button
               variant="ghost"
               size="icon-sm"
               onClick={() => setShowSimulation((v) => !v)}
-              disabled={!simulation || finishView || show3d}
+              disabled={!simulation || finishView || show3d || isKeychain}
               className={cn(
                 showSimulation && !finishView && !show3d && 'text-primary bg-primary/10',
               )}
@@ -574,12 +618,12 @@ export function Preview({
                 ボタンを残すと二重に見えてしまう）。 */}
             {!show3d && (
               <>
-                {/* 上面図インセットの表示切替。解析結果（footprint）が無い間は描く対象が無い。 */}
+                {/* 上面図インセットの表示切替。baseFigure モードのみ。 */}
                 <Button
                   variant="ghost"
                   size="icon-sm"
                   onClick={() => setTopViewOverride(!(topViewOverride ?? topViewDefault))}
-                  disabled={!topView}
+                  disabled={!topView || isKeychain}
                   className={cn(showTopView && 'text-primary bg-primary/10')}
                   title={t('preview.toolbar.topView')}
                   aria-label={t('preview.toolbar.topViewAria')}

@@ -36,14 +36,14 @@ import {
   PARAMETER_PRESETS,
   type ParameterConstraint,
 } from '@/model/state';
-import type { AnalysisParameters, BaseShape, BaseShapeSource, FigureImage } from '@/model/types';
+import type { AnalysisParameters, BaseShape, BaseShapeSource, DesignMode, FigureImage } from '@/model/types';
 
 /**
  * パラメータのカテゴリ（アコーディオンのセクション）。パラメータは十数個あり
  * 平坦に並べると目的の項目を探しづらいため、「どの部品を決める値か」で束ねる。
  * 既定はすべて開いた状態（初見で全項目が見えることを優先し、折りたたみは任意）。
  */
-const PARAMETER_SECTIONS = ['acrylic', 'slot', 'neck', 'base'] as const;
+const PARAMETER_SECTIONS = ['acrylic', 'slot', 'neck', 'base', 'keychain'] as const;
 
 export interface LeftPanelProps {
   /** 現在のパラメータ値。 */
@@ -237,6 +237,17 @@ export function LeftPanel({
     [t],
   );
 
+  /** デザインモードの選択肢。 */
+  const designModeOptions = useMemo<readonly { value: DesignMode; label: string }[]>(
+    () => [
+      { value: 'baseFigure', label: t('leftPanel.designModeBaseFigure') },
+      { value: 'keychain', label: t('leftPanel.designModeKeychain') },
+    ],
+    [t],
+  );
+
+  const isKeychain = parameters.designMode === 'keychain';
+
   const smoothing = PARAMETER_CONSTRAINTS.cutLineSmoothing;
   const alphaThreshold = PARAMETER_CONSTRAINTS.alphaThreshold;
   // 首部幅の下限は差込口幅に連動する（肩が消えないための不変条件）。入力側でも下限を
@@ -352,6 +363,26 @@ export function LeftPanel({
           <CardTitle>{t('leftPanel.parametersCardTitle')}</CardTitle>
         </CardHeader>
         <CardContent>
+          {/* デザインモード切替。baseFigure / keychain のどちらで解析・エクスポートするかを決める。 */}
+          <div className="grid gap-1.5 pb-4">
+            <Label htmlFor="design-mode">{t('leftPanel.designMode')}</Label>
+            <Select
+              value={parameters.designMode}
+              onValueChange={(next) => onParametersChange({ designMode: next as DesignMode })}
+            >
+              <SelectTrigger id="design-mode" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {designModeOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           {/* 決める部品ごとにカテゴリへ束ねる（type="multiple" ＝ 複数同時に開ける）。
               既定値ですべて開いておくので、折りたたみは「今いじらない分類を畳む」任意操作。 */}
           <Accordion type="multiple" defaultValue={[...PARAMETER_SECTIONS]}>
@@ -450,8 +481,9 @@ export function LeftPanel({
               />
             </ParameterSection>
 
-            {/* 差込口：台座スリットへ挿す「ツメ」の寸法と位置。 */}
-            <ParameterSection value="slot" title={t('leftPanel.section.slot')}>
+            {/* 差込口：台座スリットへ挿す「ツメ」の寸法と位置。keychain モードでは不要。 */}
+            {!isKeychain && (
+              <ParameterSection value="slot" title={t('leftPanel.section.slot')}>
               <NumberField
                 id="slot-width"
                 label={t('leftPanel.slotWidth')}
@@ -477,10 +509,13 @@ export function LeftPanel({
                 onValueChange={(slotDepthOffsetMm) => onParametersChange({ slotDepthOffsetMm })}
               />
             </ParameterSection>
+            )}
 
             {/* 首部：板と台座上面の間を埋める段。持ち上げ量は板の浮き＝首部の高さそのものなので
-                （台座上面 Y = カットライン最下端 + 持ち上げ量）、アクリル板ではなくここに置く。 */}
-            <ParameterSection value="neck" title={t('leftPanel.section.neck')}>
+                （台座上面 Y = カットライン最下端 + 持ち上げ量）、アクリル板ではなくここに置く。
+                keychain モードでは不要。 */}
+            {!isKeychain && (
+              <ParameterSection value="neck" title={t('leftPanel.section.neck')}>
               <NumberField
                 id="neck-width"
                 label={t('leftPanel.neckWidth', { min: neckWidth.min })}
@@ -498,9 +533,11 @@ export function LeftPanel({
                 onValueChange={(plateLiftMm) => onParametersChange({ plateLiftMm })}
               />
             </ParameterSection>
+            )}
 
-            {/* 台座：形状とその寸法。 */}
-            <ParameterSection value="base" title={t('leftPanel.section.base')}>
+            {/* 台座：形状とその寸法。keychain モードでは不要。 */}
+            {!isKeychain && (
+              <ParameterSection value="base" title={t('leftPanel.section.base')}>
               {/* 台座形状。表示のみの切替ではなく解析パラメータであり、成立検査・転倒角・
                   プレビュー・3D・エクスポートのすべてが選んだ形状に追従する（SPEC「台座形状」）。 */}
               <div className="grid gap-1.5">
@@ -627,6 +664,43 @@ export function LeftPanel({
                 />
               )}
             </ParameterSection>
+            )}
+
+            {/* キーホルダー：リング穴の直径と上端からの余裕。 */}
+            {isKeychain && (
+              <ParameterSection value="keychain" title={t('leftPanel.section.keychain')}>
+                <NumberField
+                  id="keychain-hole-diameter"
+                  label={t('leftPanel.keychainHoleDiameter')}
+                  unit="mm"
+                  value={parameters.keychainHoleDiameterMm}
+                  constraint={PARAMETER_CONSTRAINTS.keychainHoleDiameterMm}
+                  onValueChange={(keychainHoleDiameterMm) =>
+                    onParametersChange({ keychainHoleDiameterMm })
+                  }
+                />
+                <NumberField
+                  id="keychain-hole-padding"
+                  label={t('leftPanel.keychainHolePadding')}
+                  unit="mm"
+                  value={parameters.keychainHolePaddingMm}
+                  constraint={PARAMETER_CONSTRAINTS.keychainHolePaddingMm}
+                  onValueChange={(keychainHolePaddingMm) =>
+                    onParametersChange({ keychainHolePaddingMm })
+                  }
+                />
+                <NumberField
+                  id="keychain-hole-offset-x"
+                  label={t('leftPanel.keychainHoleOffsetX')}
+                  unit="mm"
+                  value={parameters.keychainHoleOffsetXMm}
+                  constraint={PARAMETER_CONSTRAINTS.keychainHoleOffsetXMm}
+                  onValueChange={(keychainHoleOffsetXMm) =>
+                    onParametersChange({ keychainHoleOffsetXMm })
+                  }
+                />
+              </ParameterSection>
+            )}
           </Accordion>
         </CardContent>
       </Card>
