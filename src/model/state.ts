@@ -75,6 +75,12 @@ export const DEFAULT_PARAMETERS: AnalysisParameters = {
   basePolygonSides: 6,
   basePolygonRotationDeg: 0,
   showBackPlate: false,
+  // デザインモードは UI 上のトグル。既定は台座設計。
+  designMode: 'baseFigure',
+  // キーホルダー穴の既定値（ grilling で確定：直径 4 mm、上端余裕 0、水平オフセット 0）。
+  keychainHoleDiameterMm: 4,
+  keychainHolePaddingMm: 0,
+  keychainHoleOffsetXMm: 0,
 };
 
 /**
@@ -195,6 +201,14 @@ export const PARAMETER_CONSTRAINTS = {
   basePolygonSides: { min: 3, max: 12, step: 1 },
   // 回転角。正の向きは方位角（右 0° → 前 90°）と同じ。
   basePolygonRotationDeg: { min: -180, max: 180, step: 1 },
+  // キーホルダー穴の直径。1–10 mm、0.5 mm 刻み（grilling で確定）。
+  keychainHoleDiameterMm: { min: 1, max: 10, step: 0.5 },
+  // キーホルダー穴の上端からの余裕。実効範囲はカットライン高さで決まるため、
+  // ここでは広めの絶対レンジを与え、解析側で余裕内にクランプ・失敗判定する。
+  keychainHolePaddingMm: { min: -50, max: 150, step: 0.5 },
+  // キーホルダー穴の水平オフセット。実効範囲はカットライン幅で決まるため、
+  // ここでは広めの絶対レンジを与え、解析側で余裕内にクランプ・失敗判定する。
+  keychainHoleOffsetXMm: { min: -150, max: 150, step: 0.5 },
 } as const satisfies Record<NumericParameterKey, ParameterConstraint>;
 
 /**

@@ -11,12 +11,14 @@ import { RECOMMENDED_DPI } from '@/analysis/scale';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useTranslation, type TranslationKey } from '@/locales';
-import type { AnalysisResult, BaseShape } from '@/model/types';
+import type { AnalysisResult, BaseShape, DesignMode } from '@/model/types';
 import { formatAzimuth } from '@/utils/azimuth';
 
 export interface ResultPanelProps {
   /** 直近の解析結果。未解析・失敗時は null。 */
   result: AnalysisResult | null;
+  /** 現在のデザインモード。 */
+  designMode?: DesignMode;
 }
 
 /** 未確定値のプレースホルダ。全項目で共通化して表記を揃える。 */
@@ -49,13 +51,14 @@ function baseShapeLabel(
  */
 function buildRows(
   result: AnalysisResult | null,
+  designMode: DesignMode,
   t: (key: TranslationKey, params?: Record<string, string | number>) => string,
 ): ResultRow[] {
   // 数値の丸めと単位付与を一箇所に集約する。null の場合は必ず PLACEHOLDER。
   const num = (value: number | undefined, unit: string, digits = 1): string =>
     value === undefined ? PLACEHOLDER : `${value.toFixed(digits)} ${unit}`;
 
-  return [
+  const commonRows: ResultRow[] = [
     {
       label: t('result.imageSize'),
       value: result ? `${result.imageSize.width} × ${result.imageSize.height} px` : PLACEHOLDER,
@@ -66,13 +69,9 @@ function buildRows(
         ? `${result.physicalSize.width.toFixed(1)} × ${result.physicalSize.height.toFixed(1)} mm`
         : PLACEHOLDER,
     },
-    // 絵柄の画素密度。実寸（＝フィギュア高さ指定）に対して画像の解像度が足りているかを
-    // 印刷業界で馴染みのある単位で示す。小数は判断に寄与しないため整数で丸める。
-    // 推奨値を下回るときは、印刷すると絵柄が粗くなることに気付けるよう警告を添える。
     {
       label: t('result.dpi'),
       value: num(result?.dpi, 'dpi', 0),
-      // exactOptionalPropertyTypes 下では undefined を直接代入できないため、条件付きで生やす。
       ...(result !== null && result.dpi < RECOMMENDED_DPI
         ? { warning: t('result.dpiWarning', { dpi: RECOMMENDED_DPI }) }
         : {}),
@@ -83,36 +82,58 @@ function buildRows(
         ? `(${result.centroid.mm.x.toFixed(1)}, ${result.centroid.mm.y.toFixed(1)}) mm`
         : PLACEHOLDER,
     },
-    { label: t('result.slotCenter'), value: num(result?.slot.centerXMm, 'mm') },
-    { label: t('result.slotWidth'), value: num(result?.slot.widthMm, 'mm') },
+  ];
+
+  if (designMode === 'keychain') {
+    const keychain = result?.keychain;
+    return [
+      ...commonRows,
+      {
+        label: t('result.keychainHoleDiameter'),
+        value: keychain ? `${(keychain.holeRadiusMm * 2).toFixed(1)} mm` : PLACEHOLDER,
+      },
+      {
+        label: t('result.keychainHoleCenter'),
+        value: keychain
+          ? `(${keychain.holeCenterMm.x.toFixed(1)}, ${keychain.holeCenterMm.y.toFixed(1)}) mm`
+          : PLACEHOLDER,
+      },
+      {
+        label: t('result.keychainRotation'),
+        value: keychain ? `${keychain.rotationDeg.toFixed(1)} °` : PLACEHOLDER,
+      },
+    ];
+  }
+
+  return [
+    ...commonRows,
+    { label: t('result.slotCenter'), value: num(result?.slot?.centerXMm, 'mm') },
+    { label: t('result.slotWidth'), value: num(result?.slot?.widthMm, 'mm') },
     {
       label: t('result.baseShape'),
-      value: result ? baseShapeLabel(t, result.base.shape) : PLACEHOLDER,
+      value: result && result.base ? baseShapeLabel(t, result.base.shape) : PLACEHOLDER,
     },
-    // 台座幅・奥行は footprint のバウンディングボックス実寸（円形では直径×直径。SPEC）。
-    { label: t('result.baseWidth'), value: num(result?.base.widthMm, 'mm') },
-    { label: t('result.baseDepth'), value: num(result?.base.depthMm, 'mm') },
+    { label: t('result.baseWidth'), value: num(result?.base?.widthMm, 'mm') },
+    { label: t('result.baseDepth'), value: num(result?.base?.depthMm, 'mm') },
     {
       label: t('result.tippingAngleLeft'),
-      value: num(result?.stability.tippingAngleLeftDeg, '°'),
+      value: num(result?.stability?.tippingAngleLeftDeg, '°'),
     },
     {
       label: t('result.tippingAngleRight'),
-      value: num(result?.stability.tippingAngleRightDeg, '°'),
+      value: num(result?.stability?.tippingAngleRightDeg, '°'),
     },
     {
       label: t('result.tippingAngleFront'),
-      value: num(result?.stability.tippingAngleFrontDeg, '°'),
+      value: num(result?.stability?.tippingAngleFrontDeg, '°'),
     },
     {
       label: t('result.tippingAngleBack'),
-      value: num(result?.stability.tippingAngleBackDeg, '°'),
+      value: num(result?.stability?.tippingAngleBackDeg, '°'),
     },
-    // 全方位で最も倒れやすい方向。正多角形・任意形状では斜めになり得るため、4 方向だけでは
-    // 見落とす（矩形・円・楕円では 4 方向の最小と一致する）。
     {
       label: t('result.tippingAngleMin'),
-      value: result
+      value: result && result.stability
         ? `${result.stability.tippingAngleMinDeg.toFixed(1)} ° / ${formatAzimuth(result.stability.worstAzimuthDeg)}`
         : PLACEHOLDER,
     },
@@ -147,9 +168,9 @@ function WarningIndicator({ message }: { message: string }) {
   );
 }
 
-export function ResultPanel({ result }: ResultPanelProps) {
+export function ResultPanel({ result, designMode = 'baseFigure' }: ResultPanelProps) {
   const { t } = useTranslation();
-  const rows = buildRows(result, t);
+  const rows = buildRows(result, designMode, t);
 
   return (
     <Card>

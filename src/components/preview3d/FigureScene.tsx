@@ -198,11 +198,11 @@ export function FigureScene({
   const gravity = useMemo(() => [0, -GRAVITY_MM_PER_SEC2, 0] as [number, number, number], []);
   const baseMeshRotation = useMemo(() => [-Math.PI / 2, 0, 0] as [number, number, number], []);
   const plateMeshPosition = useMemo(() => [0, 0, plateBackZ] as [number, number, number], [plateBackZ]);
+  // 白版・背面板・背面画像が同じ深度を夺い合わないよう、INK_GAP 刻みで奥へずらす。
   const backPlatePosition = useMemo(
-    () => [0, 0, plateBackZ - INK_GAP_MM * 2] as [number, number, number],
-    [plateBackZ],
+    () => [0, 0, plateBackZ - INK_GAP_MM * 3 - plate.thicknessMm] as [number, number, number],
+    [plateBackZ, plate.thicknessMm],
   );
-  const backPlateRotation = useMemo(() => [0, Math.PI, 0] as [number, number, number], []);
   const floorColliderArgs = useMemo(() => [1000, 0.1, 1000] as [number, number, number], []);
   const floorColliderPosition = useMemo(() => [0, -0.1, 0] as [number, number, number], []);
 
@@ -304,15 +304,10 @@ export function FigureScene({
               />
             </mesh>
 
-            {/* 背面保護アクリル板。白版のすぐ後ろに、同じカットラインで板厚分奥へ向けて
-                配置する。解析には影響せず、視覚確認用の表示オプション。両面描画にして
-                後ろからも見えるようにする。 */}
+            {/* 背面保護アクリル板。白版のすぐ後ろに、同じカットライン・同じ向きで配置する。
+                前から見たとき輪郭が前面板と重なるよう、回転せず奥へずらす。 */}
             {showBackPlate && (
-              <mesh
-                geometry={plateGeometry}
-                position={backPlatePosition}
-                rotation={backPlateRotation}
-              >
+              <mesh geometry={plateGeometry} position={backPlatePosition}>
                 <AcrylicMaterial thicknessMm={plate.thicknessMm} side={DoubleSide} />
               </mesh>
             )}
@@ -323,7 +318,7 @@ export function FigureScene({
                 position={[
                   artwork.centerX,
                   artwork.centerY,
-                  plateBackZ - INK_GAP_MM * 2 - plate.thicknessMm,
+                  plateBackZ - INK_GAP_MM * 4 - plate.thicknessMm,
                 ]}
               >
                 <planeGeometry args={[backImageSizeMm.width, backImageSizeMm.height]} />
@@ -369,7 +364,6 @@ export function FigureScene({
             <ConvexHullCollider
               args={plateHullArgs}
               position={backPlatePosition}
-              rotation={backPlateRotation}
               restitution={0.2}
               friction={0.5}
             />

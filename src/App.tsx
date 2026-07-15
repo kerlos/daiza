@@ -230,7 +230,14 @@ function App() {
     setExporting(true);
     void (async () => {
       try {
-        const dataUrl = await generateMockup3dPng(result, image, parameters.alphaThreshold);
+        const dataUrl = await generateMockup3dPng(
+          result,
+          image,
+          parameters.alphaThreshold,
+          parameters.thicknessMm,
+          parameters.showBackPlate,
+          state.backImage,
+        );
         downloadDataUrl(dataUrl, exportMockupFileName(image.fileName, 'mockup3d'));
       } catch (cause) {
         actions.failAnalysis(toUnexpectedError(cause));
@@ -238,7 +245,15 @@ function App() {
         setExporting(false);
       }
     })();
-  }, [result, image, parameters.alphaThreshold, actions]);
+  }, [
+    result,
+    image,
+    parameters.alphaThreshold,
+    parameters.thicknessMm,
+    parameters.showBackPlate,
+    state.backImage,
+    actions,
+  ]);
 
   return (
     <div className="bg-background flex h-svh flex-col">
@@ -296,6 +311,8 @@ function App() {
             mmPerPixel={mmPerPixel}
             alphaThreshold={parameters.alphaThreshold}
             showBackPlate={parameters.showBackPlate}
+            designMode={parameters.designMode}
+            thicknessMm={parameters.thicknessMm}
             backImage={state.backImage}
             status={state.status}
             error={state.error}
@@ -316,7 +333,7 @@ function App() {
         {/* 右パネル：解析結果と、それを書き出すエクスポート操作。左パネルと同じく
             可変幅・列内スクロール。 */}
         <aside className="flex shrink-0 flex-col gap-4 lg:w-[var(--right-pane-width)] lg:overflow-y-auto">
-          <ResultPanel result={state.result} />
+          <ResultPanel result={state.result} designMode={parameters.designMode} />
           {/* 結果がある時だけ各 onExport を渡し、無ければ prop 自体を省いてボタンを無効化する
               （exactOptionalPropertyTypes 下では undefined の明示代入を避け、条件スプレッドで出し分ける）。 */}
           <ExportPanel
